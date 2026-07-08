@@ -1,0 +1,65 @@
+# SDD Configuration — booking-platform
+
+project:
+  name: booking-platform
+  description: "Multi-tenant booking platform for local businesses (salons, clinics, sports courts, etc.)"
+  license: MIT
+
+architecture:
+  type: multi-tenant
+  tenant_strategy: single_db_logical_separation
+  tenant_key: tenant_id
+  framework: Laravel 13.x
+  admin_panel: FilamentPHP v5
+  database: MySQL 8.0
+
+stack:
+  backend: Laravel 13.x
+  admin_panel: FilamentPHP v5
+  database: MySQL 8.0
+  payments: Stripe (webhooks + API)
+  notifications: "Laravel Mail (SMTP/Mailgun) + Twilio SMS"
+  queue: Laravel Queues (database driver)
+  scheduler: Laravel Scheduler
+  local_dev: Laravel Sail (Docker)
+  code_style: PSR-12 + Laravel Pint
+  testing: "Pest PHP / PHPUnit (80% coverage target)"
+
+rbac:
+  - role: Super Admin
+    scope: Global platform management, tenant onboarding
+  - role: Business Admin
+    scope: Full tenant panel access
+  - role: Employee
+    scope: Restricted tenant panel (own agenda only)
+  - role: Client
+    scope: Public frontend / booking area
+
+key_modules:
+  - name: Services & Duration
+    description: Configurable service catalog with dynamic time-slot calculation
+  - name: Interactive Calendar
+    description: Real-time booking UI with guest checkout
+  - name: Stripe Payments
+    description: "Full upfront, deposit, or no-payment modes; auto-refunds"
+  - name: Notifications
+    description: "Async SMS/email via queues; confirmation, reminders (24h), cancellation, reschedule"
+
+testing:
+  strict_tdd: true
+  coverage_target: 80
+  critical_paths:
+    - availability calculation
+    - Stripe webhooks
+    - notification queues
+  tools: Pest PHP or PHPUnit
+
+persistence:
+  mode: hybrid
+  engram_topic_key: sdd-init-modelo-seleccionado/booking-platform
+  openspec_path: openspec/
+
+self_hosting:
+  local_dev: "./vendor/bin/sail up -d"
+  queue_worker: Supervisor for queue processes
+  cron: "* * * * * cd /project-path && php artisan schedule:run >> /dev/null 2>&1"
