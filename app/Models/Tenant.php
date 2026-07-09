@@ -29,11 +29,6 @@ class Tenant extends Model implements HasTenants
         'stripe_api_key',
         'stripe_webhook_secret',
         'payment_account_mode',
-        'stripe_connected_account_id',
-        'stripe_connect_charges_enabled',
-        'stripe_connect_payouts_enabled',
-        'stripe_connect_onboarding_status',
-        'stripe_connect_onboarded_at',
         'twilio_sid',
         'twilio_auth_token',
         'twilio_phone_number',
@@ -104,6 +99,33 @@ class Tenant extends Model implements HasTenants
         }
 
         return $this->hasDirectStripeCredentials();
+    }
+
+    public static function sensitiveStripeConnectFields(): array
+    {
+        return [
+            'stripe_connected_account_id',
+            'stripe_connect_charges_enabled',
+            'stripe_connect_payouts_enabled',
+            'stripe_connect_onboarding_status',
+            'stripe_connect_onboarded_at',
+        ];
+    }
+
+    public function syncStripeConnectAccount(
+        string $connectedAccountId,
+        bool $chargesEnabled,
+        bool $payoutsEnabled,
+        bool $detailsSubmitted,
+    ): void {
+        $this->forceFill([
+            'payment_account_mode' => self::PAYMENT_ACCOUNT_CONNECT,
+            'stripe_connected_account_id' => $connectedAccountId,
+            'stripe_connect_charges_enabled' => $chargesEnabled,
+            'stripe_connect_payouts_enabled' => $payoutsEnabled,
+            'stripe_connect_onboarding_status' => $detailsSubmitted ? 'onboarded' : 'pending',
+            'stripe_connect_onboarded_at' => $detailsSubmitted ? now() : null,
+        ])->save();
     }
 
     public function getTenants(Panel $panel): array|Collection

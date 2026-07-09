@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Services\DTOs\PaymentIntentResult;
 use App\Services\DTOs\RefundResult;
 use App\Support\Currency;
+use Illuminate\Support\Facades\Http;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 
@@ -12,8 +13,11 @@ class StripeService
 {
     private StripeClient $client;
 
+    private ?string $apiKey;
+
     public function __construct(string|StripeClient $apiKeyOrClient)
     {
+        $this->apiKey = is_string($apiKeyOrClient) ? $apiKeyOrClient : null;
         $this->client = $apiKeyOrClient instanceof StripeClient
             ? $apiKeyOrClient
             : new StripeClient($apiKeyOrClient);
@@ -31,6 +35,26 @@ class StripeService
         }
 
         return $this->client->events->retrieve($eventId, $stripeOptions);
+    }
+
+    public function exchangeConnectAuthorizationCode(string $code): array
+    {
+        return Http::asForm()
+            ->withBasicAuth($this->apiKey ?? config('services.stripe.secret'), '')
+            ->post('https://connect.stripe.com/oauth/token', [
+                'grant_type' => 'authorization_code',
+                'code' => $code,
+            ])
+            ->throw()
+            ->json();
+    }
+
+    /**
+     * @throws ApiErrorException
+     */
+    public function retrieveConnectAccount(string $connectedAccountId): object
+    {
+        return $this->client->accounts->retrieve($connectedAccountId);
     }
 
     /**

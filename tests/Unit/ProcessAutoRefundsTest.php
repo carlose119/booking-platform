@@ -28,13 +28,27 @@ class ProcessAutoRefundsTest extends TestCase
 
     private function createTenantWithStripe(array $overrides = []): Tenant
     {
-        return Tenant::create(array_merge([
+        $connectValues = array_intersect_key($overrides, array_flip(Tenant::sensitiveStripeConnectFields()));
+        $overrides = array_diff_key($overrides, array_flip(Tenant::sensitiveStripeConnectFields()));
+
+        $tenant = Tenant::create(array_merge([
             'name' => 'Test Salon',
             'slug' => 'test-salon',
             'payment_policy' => 'nopayment',
             'stripe_api_key' => 'sk_test_fake_key',
             'refund_window_hours' => 24,
         ], $overrides));
+
+        if (isset($connectValues['stripe_connected_account_id'])) {
+            $tenant->syncStripeConnectAccount(
+                $connectValues['stripe_connected_account_id'],
+                (bool) ($connectValues['stripe_connect_charges_enabled'] ?? false),
+                false,
+                false,
+            );
+        }
+
+        return $tenant;
     }
 
     private function createCancelledPaidBooking(Tenant $tenant, Carbon $cancelledAt, string $paymentStatus = 'paid'): Booking

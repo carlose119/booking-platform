@@ -251,9 +251,8 @@ class BookingWithPaymentTest extends TestCase
             'slug' => 'connect-salon',
             'payment_policy' => '100upfront',
             'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_connect_123',
-            'stripe_connect_charges_enabled' => true,
         ]);
+        $tenant->syncStripeConnectAccount('acct_connect_123', true, false, true);
 
         $employee = User::create([
             'tenant_id' => $tenant->id,
@@ -324,9 +323,8 @@ class BookingWithPaymentTest extends TestCase
             'slug' => 'unready-connect-salon',
             'payment_policy' => '100upfront',
             'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_connect_123',
-            'stripe_connect_charges_enabled' => false,
         ]);
+        $tenant->syncStripeConnectAccount('acct_connect_123', false, false, false);
 
         $employee = User::create([
             'tenant_id' => $tenant->id,

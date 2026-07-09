@@ -115,9 +115,8 @@ class ProcessWebhookTest extends TestCase
             'slug' => 'connect-salon',
             'payment_policy' => '100upfront',
             'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_connect_123',
-            'stripe_connect_charges_enabled' => true,
         ]);
+        $tenant->syncStripeConnectAccount('acct_connect_123', true, false, true);
         $booking = $this->createBookingWithIntent($tenant);
         $booking->update([
             'payment_account_mode' => 'connect',
@@ -160,9 +159,8 @@ class ProcessWebhookTest extends TestCase
             'slug' => 'connect-salon-drift',
             'payment_policy' => '100upfront',
             'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_current_after_dispatch',
-            'stripe_connect_charges_enabled' => true,
         ]);
+        $tenant->syncStripeConnectAccount('acct_current_after_dispatch', true, false, true);
         $booking = $this->createBookingWithIntent($tenant);
         $booking->update([
             'payment_account_mode' => 'connect',
@@ -199,11 +197,7 @@ class ProcessWebhookTest extends TestCase
 
         $job = new ProcessWebhook('evt_direct_before_migration', $tenant->id, null, Tenant::PAYMENT_ACCOUNT_DIRECT);
 
-        $tenant->update([
-            'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_current_after_migration',
-            'stripe_connect_charges_enabled' => true,
-        ]);
+        $tenant->syncStripeConnectAccount('acct_current_after_migration', true, false, true);
 
         $mockEvents = Mockery::mock();
         $mockEvents->shouldReceive('retrieve')

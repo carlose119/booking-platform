@@ -39,9 +39,8 @@ class TenantPaymentAccountTest extends TestCase
             'slug' => 'connect-tenant',
             'payment_policy' => '100upfront',
             'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_connect_123',
-            'stripe_connect_charges_enabled' => true,
         ]);
+        $tenant->syncStripeConnectAccount('acct_connect_123', true, false, true);
 
         $this->assertTrue($tenant->usesStripeConnect());
         $this->assertTrue($tenant->hasActiveConnectCharges());
@@ -55,11 +54,70 @@ class TenantPaymentAccountTest extends TestCase
             'slug' => 'unready-connect-tenant',
             'payment_policy' => '100upfront',
             'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_connect_456',
-            'stripe_connect_charges_enabled' => false,
         ]);
+        $tenant->syncStripeConnectAccount('acct_connect_456', false, false, false);
 
         $this->assertFalse($tenant->hasActiveConnectCharges());
         $this->assertFalse($tenant->isPaymentAccountReady());
+    }
+
+    public function test_connect_ownership_and_status_fields_are_not_mass_assignable(): void
+    {
+        $tenant = Tenant::create([
+            'name' => 'Protected Tenant',
+            'slug' => 'protected-tenant',
+        ]);
+
+        foreach (Tenant::sensitiveStripeConnectFields() as $field) {
+            $this->assertFalse($tenant->isFillable($field), $field.' should not be mass assignable.');
+        }
+    }
+
+    public function test_forged_mass_update_cannot_activate_arbitrary_connect_account(): void
+    {
+        $tenant = Tenant::create([
+            'name' => 'Forged Update Tenant',
+            'slug' => 'forged-update-tenant',
+        ]);
+
+        $tenant->update([
+            'stripe_connected_account_id' => 'acct_attacker_123',
+            'stripe_connect_charges_enabled' => true,
+            'stripe_connect_payouts_enabled' => true,
+            'stripe_connect_onboarding_status' => 'onboarded',
+            'stripe_connect_onboarded_at' => now(),
+        ]);
+
+        $tenant->refresh();
+
+        $this->assertNull($tenant->stripe_connected_account_id);
+        $this->assertFalse($tenant->stripe_connect_charges_enabled ?? false);
+        $this->assertFalse($tenant->stripe_connect_payouts_enabled ?? false);
+        $this->assertNull($tenant->stripe_connect_onboarding_status);
+        $this->assertNull($tenant->stripe_connect_onboarded_at);
+    }
+
+    public function test_controlled_connect_sync_updates_ownership_and_status_fields(): void
+    {
+        $tenant = Tenant::create([
+            'name' => 'OAuth Tenant',
+            'slug' => 'oauth-tenant',
+        ]);
+
+        $tenant->syncStripeConnectAccount(
+            connectedAccountId: 'acct_oauth_123',
+            chargesEnabled: true,
+            payoutsEnabled: false,
+            detailsSubmitted: true,
+        );
+
+        $tenant->refresh();
+
+        $this->assertSame(Tenant::PAYMENT_ACCOUNT_CONNECT, $tenant->payment_account_mode);
+        $this->assertSame('acct_oauth_123', $tenant->stripe_connected_account_id);
+        $this->assertTrue($tenant->stripe_connect_charges_enabled);
+        $this->assertFalse($tenant->stripe_connect_payouts_enabled);
+        $this->assertSame('onboarded', $tenant->stripe_connect_onboarding_status);
+        $this->assertNotNull($tenant->stripe_connect_onboarded_at);
     }
 }

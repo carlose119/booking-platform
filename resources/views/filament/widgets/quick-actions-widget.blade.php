@@ -1,10 +1,17 @@
 <x-filament-widgets::widget>
+    @php
+        $canStartStripeConnect = auth()->user()?->role === \App\Enums\UserRole::BusinessAdmin
+            && filled(config('services.stripe.secret'))
+            && filled(config('services.stripe.client_id'))
+            && filled(config('services.stripe.connect_webhook_secret'));
+    @endphp
+
     <x-filament::section>
         <x-slot name="heading">
             Quick Actions
         </x-slot>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <a href="{{ \App\Filament\Resources\BookingResource::getUrl('index') }}" 
                class="block p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow border border-gray-200">
                 <div class="flex items-center">
@@ -43,6 +50,21 @@
                     </div>
                 </div>
             </a>
+
+            @if ($canStartStripeConnect)
+                <a href="{{ route('stripe.connect.start') }}"
+                   class="block p-4 bg-white rounded-lg shadow hover:shadow-md transition-shadow border border-gray-200">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0">
+                            <x-heroicon-o-credit-card class="h-8 w-8 text-primary-500" />
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-900">Stripe Connect</p>
+                            <p class="text-xs text-gray-500">Start or resume onboarding</p>
+                        </div>
+                    </div>
+                </a>
+            @endif
         </div>
     </x-filament::section>
 </x-filament-widgets::widget>

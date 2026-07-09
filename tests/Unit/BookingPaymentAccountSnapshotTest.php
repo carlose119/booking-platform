@@ -52,10 +52,24 @@ class BookingPaymentAccountSnapshotTest extends TestCase
 
     private function createTenant(array $overrides = []): Tenant
     {
-        return Tenant::create(array_merge([
+        $connectValues = array_intersect_key($overrides, array_flip(Tenant::sensitiveStripeConnectFields()));
+        $overrides = array_diff_key($overrides, array_flip(Tenant::sensitiveStripeConnectFields()));
+
+        $tenant = Tenant::create(array_merge([
             'name' => fake()->unique()->company(),
             'slug' => fake()->unique()->slug(),
         ], $overrides));
+
+        if (isset($connectValues['stripe_connected_account_id'])) {
+            $tenant->syncStripeConnectAccount(
+                $connectValues['stripe_connected_account_id'],
+                (bool) ($connectValues['stripe_connect_charges_enabled'] ?? false),
+                false,
+                false,
+            );
+        }
+
+        return $tenant;
     }
 
     private function createBooking(Tenant $tenant, array $overrides = []): Booking

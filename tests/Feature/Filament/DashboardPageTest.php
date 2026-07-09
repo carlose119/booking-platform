@@ -172,4 +172,61 @@ class DashboardPageTest extends TestCase
             ->assertSee('Manage Services')
             ->assertSee('Employee Schedules');
     }
+
+    public function test_quick_actions_widget_shows_connect_onboarding_for_business_admins(): void
+    {
+        config([
+            'services.stripe.secret' => 'sk_test_platform',
+            'services.stripe.client_id' => 'ca_test_client',
+            'services.stripe.connect_webhook_secret' => 'whsec_connect_secret',
+        ]);
+
+        Livewire::test(QuickActionsWidget::class)
+            ->assertSee('Stripe Connect')
+            ->assertSee('Start or resume onboarding')
+            ->assertSee(route('stripe.connect.start'), false);
+    }
+
+    public function test_quick_actions_widget_hides_connect_onboarding_when_config_is_missing(): void
+    {
+        config([
+            'services.stripe.secret' => null,
+            'services.stripe.client_id' => 'ca_test_client',
+        ]);
+
+        Livewire::test(QuickActionsWidget::class)
+            ->assertSee('Quick Actions')
+            ->assertDontSee('Stripe Connect')
+            ->assertDontSee(route('stripe.connect.start'), false);
+    }
+
+    public function test_quick_actions_widget_hides_connect_onboarding_when_webhook_secret_is_missing(): void
+    {
+        config([
+            'services.stripe.secret' => 'sk_test_platform',
+            'services.stripe.client_id' => 'ca_test_client',
+            'services.stripe.connect_webhook_secret' => null,
+        ]);
+
+        Livewire::test(QuickActionsWidget::class)
+            ->assertSee('Quick Actions')
+            ->assertDontSee('Stripe Connect')
+            ->assertDontSee(route('stripe.connect.start'), false);
+    }
+
+    public function test_quick_actions_widget_hides_connect_onboarding_for_employees(): void
+    {
+        config([
+            'services.stripe.secret' => 'sk_test_platform',
+            'services.stripe.client_id' => 'ca_test_client',
+            'services.stripe.connect_webhook_secret' => 'whsec_connect_secret',
+        ]);
+        $this->actingAs($this->employee);
+        Filament::setTenant($this->tenant);
+
+        Livewire::test(QuickActionsWidget::class)
+            ->assertSee('Quick Actions')
+            ->assertDontSee('Stripe Connect')
+            ->assertDontSee(route('stripe.connect.start'), false);
+    }
 }

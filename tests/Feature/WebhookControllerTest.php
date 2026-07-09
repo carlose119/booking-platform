@@ -84,8 +84,8 @@ class WebhookControllerTest extends TestCase
             'slug' => 'connect-webhook-salon',
             'payment_policy' => '100upfront',
             'payment_account_mode' => 'connect',
-            'stripe_connected_account_id' => 'acct_connect_123',
         ]);
+        $tenant->syncStripeConnectAccount('acct_connect_123', true, false, true);
 
         $payload = json_encode([
             'id' => 'evt_connect_123',
@@ -275,6 +275,47 @@ class WebhookControllerTest extends TestCase
 
         $response->assertStatus(400);
         $response->assertJson(['error' => 'Webhook secret not configured']);
+
+        Bus::assertNotDispatched(ProcessWebhook::class);
+    }
+
+    public function test_connect_webhook_without_configured_secret_logs_safe_context_and_returns_400(): void
+    {
+        config(['services.stripe.connect_webhook_secret' => null]);
+        Bus::fake();
+        Log::spy();
+
+        $payload = json_encode([
+            'id' => 'evt_connect_missing_secret',
+            'account' => 'acct_connect_123',
+            'type' => 'payment_intent.succeeded',
+        ]);
+
+        $response = $this->call(
+            'POST',
+            '/webhooks/stripe/connect',
+            [],
+            [],
+            [],
+            [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_STRIPE_SIGNATURE' => 't=123,v1=fake_signature',
+            ],
+            $payload
+        );
+
+        $response->assertStatus(400);
+        $response->assertJson(['error' => 'Webhook secret not configured']);
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->with('Stripe Connect webhook secret is not configured.', Mockery::on(
+                fn (array $context) => $context['reason'] === 'missing_connect_webhook_secret'
+                    && $context['endpoint'] === 'stripe_connect'
+                    && $context['has_signature_header'] === true
+                    && $context['payload_size'] === strlen($payload)
+                    && ! str_contains(json_encode($context), 'whsec_')
+            ));
 
         Bus::assertNotDispatched(ProcessWebhook::class);
     }

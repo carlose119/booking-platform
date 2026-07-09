@@ -47,6 +47,51 @@ class MultiCurrencyResourceTest extends TestCase
         $this->assertSame('US Dollar (USD)', TenantResource::formatDefaultCurrency(null));
     }
 
+    public function test_tenant_resource_requires_direct_credentials_only_for_paid_direct_mode(): void
+    {
+        $rules = TenantResource::directStripeCredentialRules('direct', '100upfront');
+        $validator = Validator::make(['stripe_api_key' => null], ['stripe_api_key' => $rules]);
+
+        $this->assertTrue($validator->fails());
+        $this->assertArrayHasKey('stripe_api_key', $validator->errors()->messages());
+
+        $connectRules = TenantResource::directStripeCredentialRules('connect', '100upfront');
+        $connectValidator = Validator::make(['stripe_api_key' => null], ['stripe_api_key' => $connectRules]);
+
+        $this->assertFalse($connectValidator->fails());
+    }
+
+    public function test_tenant_resource_formats_connect_status_from_tenant_readiness(): void
+    {
+        $readyTenant = Tenant::create([
+            'name' => 'Ready Connect Salon',
+            'slug' => 'ready-connect-salon',
+            'payment_account_mode' => Tenant::PAYMENT_ACCOUNT_CONNECT,
+        ]);
+        $readyTenant->syncStripeConnectAccount('acct_ready_123', true, false, true);
+
+        $pendingTenant = Tenant::create([
+            'name' => 'Pending Connect Salon',
+            'slug' => 'pending-connect-salon',
+            'payment_account_mode' => Tenant::PAYMENT_ACCOUNT_CONNECT,
+        ]);
+        $pendingTenant->syncStripeConnectAccount('acct_pending_123', false, false, false);
+
+        $this->assertSame('Ready for charges', TenantResource::connectStatusLabel($readyTenant));
+        $this->assertSame('Onboarding incomplete', TenantResource::connectStatusLabel($pendingTenant));
+    }
+
+    public function test_tenant_resource_marks_connect_ownership_and_status_fields_read_only(): void
+    {
+        $this->assertSame([
+            'stripe_connected_account_id',
+            'stripe_connect_charges_enabled',
+            'stripe_connect_payouts_enabled',
+            'stripe_connect_onboarding_status',
+            'stripe_connect_onboarded_at',
+        ], TenantResource::readOnlyStripeConnectFields());
+    }
+
     public function test_service_table_formats_price_with_active_tenant_currency(): void
     {
         [$tenant, $admin] = $this->tenantContext('eur');

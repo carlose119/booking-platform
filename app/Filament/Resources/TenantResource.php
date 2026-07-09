@@ -74,11 +74,21 @@ class TenantResource extends Resource
                             ->minValue(0)
                             ->required(),
 
+                        Forms\Components\Select::make('payment_account_mode')
+                            ->label('Payment Account Mode')
+                            ->options(self::paymentAccountModeOptions())
+                            ->default(Tenant::PAYMENT_ACCOUNT_DIRECT)
+                            ->required()
+                            ->reactive()
+                            ->live(onBlur: true),
+
                         Forms\Components\TextInput::make('stripe_api_key')
                             ->label('Stripe API Key')
                             ->password()
                             ->revealable()
                             ->nullable()
+                            ->visible(fn ($get) => $get('payment_account_mode') !== Tenant::PAYMENT_ACCOUNT_CONNECT)
+                            ->rules(fn ($get) => self::directStripeCredentialRules($get('payment_account_mode'), $get('payment_policy')))
                             ->hint('sk_test_... or sk_live_...'),
 
                         Forms\Components\TextInput::make('stripe_webhook_secret')
@@ -86,7 +96,34 @@ class TenantResource extends Resource
                             ->password()
                             ->revealable()
                             ->nullable()
+                            ->visible(fn ($get) => $get('payment_account_mode') !== Tenant::PAYMENT_ACCOUNT_CONNECT)
                             ->hint('whsec_...'),
+
+                        Forms\Components\TextInput::make('stripe_connected_account_id')
+                            ->label('Connected Account ID')
+                            ->disabled()
+                            ->dehydrated(false)
+                            ->nullable()
+                            ->visible(fn ($get) => $get('payment_account_mode') === Tenant::PAYMENT_ACCOUNT_CONNECT)
+                            ->hint('acct_...'),
+
+                        Forms\Components\TextInput::make('stripe_connect_onboarding_status')
+                            ->label('Connect Onboarding Status')
+                            ->disabled()
+                            ->dehydrated(false)
+                            ->visible(fn ($get) => $get('payment_account_mode') === Tenant::PAYMENT_ACCOUNT_CONNECT),
+
+                        Forms\Components\Toggle::make('stripe_connect_charges_enabled')
+                            ->label('Charges Enabled')
+                            ->disabled()
+                            ->dehydrated(false)
+                            ->visible(fn ($get) => $get('payment_account_mode') === Tenant::PAYMENT_ACCOUNT_CONNECT),
+
+                        Forms\Components\Toggle::make('stripe_connect_payouts_enabled')
+                            ->label('Payouts Enabled')
+                            ->disabled()
+                            ->dehydrated(false)
+                            ->visible(fn ($get) => $get('payment_account_mode') === Tenant::PAYMENT_ACCOUNT_CONNECT),
                     ])
                     ->columns(2),
 
@@ -131,6 +168,15 @@ class TenantResource extends Resource
                     ->label('Default Currency')
                     ->formatStateUsing(fn ($state) => self::formatDefaultCurrency($state))
                     ->sortable(),
+                Tables\Columns\TextColumn::make('payment_account_mode')
+                    ->label('Payment Mode')
+                    ->formatStateUsing(fn (?string $state) => self::paymentAccountModeOptions()[$state ?? Tenant::PAYMENT_ACCOUNT_DIRECT])
+                    ->badge()
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('stripe_connect_onboarding_status')
+                    ->label('Connect Status')
+                    ->formatStateUsing(fn (?string $state, Tenant $record) => self::connectStatusLabel($record))
+                    ->badge(),
                 Tables\Columns\TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable(),
@@ -166,6 +212,41 @@ class TenantResource extends Resource
     public static function defaultCurrencyRules(): array
     {
         return ['in:'.implode(',', array_keys(self::defaultCurrencyOptions()))];
+    }
+
+    public static function paymentAccountModeOptions(): array
+    {
+        return [
+            Tenant::PAYMENT_ACCOUNT_DIRECT => 'Direct API Keys',
+            Tenant::PAYMENT_ACCOUNT_CONNECT => 'Stripe Connect',
+        ];
+    }
+
+    public static function directStripeCredentialRules(?string $paymentAccountMode, ?string $paymentPolicy): array
+    {
+        return $paymentAccountMode === Tenant::PAYMENT_ACCOUNT_CONNECT || $paymentPolicy === 'nopayment'
+            ? ['nullable']
+            : ['required'];
+    }
+
+    public static function readOnlyStripeConnectFields(): array
+    {
+        return [
+            ...Tenant::sensitiveStripeConnectFields(),
+        ];
+    }
+
+    public static function connectStatusLabel(Tenant $tenant): string
+    {
+        if (! $tenant->usesStripeConnect()) {
+            return 'Direct mode';
+        }
+
+        if ($tenant->hasActiveConnectCharges()) {
+            return 'Ready for charges';
+        }
+
+        return 'Onboarding incomplete';
     }
 
     public static function formatDefaultCurrency(?string $currency): string

@@ -47,7 +47,11 @@ Chain strategy: stacked-to-main
 
 ## Phase 4: Onboarding / Admin UI
 
-- [ ] 4.1 Update `config/services.php` and `routes/web.php` for platform Stripe keys, OAuth start/callback, and Connect webhook routes.
-- [ ] 4.2 Create `app/Http/Controllers/StripeConnectController.php` for Standard OAuth start/callback, state validation, tenant-only persistence, and non-admin denial.
-- [ ] 4.3 Update `app/Filament/Resources/TenantResource.php` with payment mode fields, conditional direct credentials, Connect status display, and onboarding action/link.
-- [ ] 4.4 Add feature/Filament tests for onboarding authorization, state mismatch, TenantResource validation, status display, and unsupported currency rejection.
+- [x] 4.1 Update `config/services.php` and `routes/web.php` for platform Stripe keys, OAuth start/callback, and Connect webhook routes.
+- [x] 4.2 Create `app/Http/Controllers/StripeConnectController.php` for Standard OAuth start/callback, state validation, tenant-only persistence, and non-admin denial.
+- [x] 4.3 Update `app/Filament/Resources/TenantResource.php` with payment mode fields, conditional direct credentials, Connect status display, and onboarding action/link.
+- [x] 4.4 Add feature/Filament tests for onboarding authorization, state mismatch, TenantResource validation, status display, and unsupported currency rejection.
+
+## Post-PR3 Resilience Remediation
+
+- [x] R11 Require `STRIPE_CONNECT_WEBHOOK_SECRET` for Connect onboarding readiness in dashboard visibility and OAuth start, and log safe operational context when Connect webhooks arrive without a configured secret.

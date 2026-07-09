@@ -20,6 +20,13 @@ class WebhookController extends Controller
         $secret = config('services.stripe.connect_webhook_secret');
 
         if (! $secret) {
+            Log::warning('Stripe Connect webhook secret is not configured.', [
+                'reason' => 'missing_connect_webhook_secret',
+                'endpoint' => 'stripe_connect',
+                'has_signature_header' => filled($signature),
+                'payload_size' => strlen($payload),
+            ]);
+
             return response()->json(['error' => 'Webhook secret not configured'], 400);
         }
 
