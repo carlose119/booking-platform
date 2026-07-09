@@ -98,6 +98,37 @@ class StripeServiceTest extends TestCase
         $service->createPaymentIntent(5000, 'brl', ['booking_id' => 42]);
     }
 
+    public function test_create_payment_intent_passes_connect_request_options(): void
+    {
+        $paymentIntentData = [
+            'id' => 'pi_test_connect',
+            'client_secret' => 'secret_test_connect',
+            'amount' => 5000,
+            'status' => 'requires_payment_method',
+        ];
+
+        $mockPaymentIntents = Mockery::mock();
+        $mockPaymentIntents->shouldReceive('create')
+            ->once()
+            ->with(Mockery::on(fn ($params) => $params['amount'] === 5000
+                && $params['currency'] === 'usd'
+                && $params['metadata'] === ['booking_id' => 42]
+            ), ['stripe_account' => 'acct_connect_123'])
+            ->andReturn(PaymentIntent::constructFrom($paymentIntentData));
+
+        $mockClient = Mockery::mock(StripeClient::class);
+        $mockClient->paymentIntents = $mockPaymentIntents;
+
+        $result = (new StripeService($mockClient))->createPaymentIntent(
+            5000,
+            'usd',
+            ['booking_id' => 42],
+            ['stripe_account' => 'acct_connect_123'],
+        );
+
+        $this->assertEquals('pi_test_connect', $result->id);
+    }
+
     // ─── createRefund returns correct DTO ─────────────────────────────────
 
     public function test_create_refund_returns_correct_dto(): void
@@ -154,5 +185,51 @@ class StripeServiceTest extends TestCase
         $result = $service->createRefund('pi_test_123', 1000);
 
         $this->assertEquals(1000, $result->amount);
+    }
+
+    public function test_create_refund_passes_connect_request_options(): void
+    {
+        $refundData = [
+            'id' => 're_test_connect',
+            'status' => 'succeeded',
+            'amount' => 5000,
+        ];
+
+        $mockRefunds = Mockery::mock();
+        $mockRefunds->shouldReceive('create')
+            ->once()
+            ->with(Mockery::on(fn ($params) => $params['payment_intent'] === 'pi_test_123'
+            ), ['stripe_account' => 'acct_connect_123'])
+            ->andReturn(Refund::constructFrom($refundData));
+
+        $mockClient = Mockery::mock(StripeClient::class);
+        $mockClient->refunds = $mockRefunds;
+
+        $result = (new StripeService($mockClient))->createRefund(
+            'pi_test_123',
+            null,
+            ['stripe_account' => 'acct_connect_123'],
+        );
+
+        $this->assertEquals('re_test_connect', $result->id);
+    }
+
+    public function test_retrieve_event_passes_connect_request_options(): void
+    {
+        $mockEvents = Mockery::mock();
+        $mockEvents->shouldReceive('retrieve')
+            ->once()
+            ->with('evt_connect_123', ['stripe_account' => 'acct_connect_123'])
+            ->andReturn((object) ['id' => 'evt_connect_123']);
+
+        $mockClient = Mockery::mock(StripeClient::class);
+        $mockClient->events = $mockEvents;
+
+        $event = (new StripeService($mockClient))->retrieveEvent(
+            'evt_connect_123',
+            ['stripe_account' => 'acct_connect_123'],
+        );
+
+        $this->assertEquals('evt_connect_123', $event->id);
     }
 }

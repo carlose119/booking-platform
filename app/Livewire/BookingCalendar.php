@@ -8,6 +8,7 @@ use App\Models\Service;
 use App\Models\Tenant;
 use App\Services\AvailabilityService;
 use App\Services\BookingService;
+use App\Services\Stripe\StripeAccountResolver;
 use App\Services\StripeService;
 use App\Support\Currency;
 use Illuminate\Database\QueryException;
@@ -215,7 +216,10 @@ class BookingCalendar extends Component
             // If payment is required, create PaymentIntent and show payment step
             if ($this->requiresPayment) {
                 $this->createPaymentIntent($booking);
-                $this->currentStep = 3; // Payment step
+
+                if ($this->clientSecret) {
+                    $this->currentStep = 3; // Payment step
+                }
             } else {
                 $this->currentStep = 4; // Confirmation step (no payment)
             }
@@ -235,9 +239,17 @@ class BookingCalendar extends Component
     {
         $tenant = Tenant::findOrFail($this->tenantId);
         $service = Service::where('tenant_id', $this->tenantId)->findOrFail($booking->service_id);
+        $accountContext = app(StripeAccountResolver::class)->forTenantCharges($tenant);
+
+        if (! $accountContext->isReadyForCharges()) {
+            $this->errorMessage = 'Payments are not available for this business yet.';
+            $this->currentStep = 2;
+
+            return;
+        }
 
         $bookingService = app(BookingService::class);
-        $snapshot = $bookingService->snapshotPaymentForStripe($booking, $tenant, $service);
+        $snapshot = $bookingService->snapshotPaymentForStripe($booking, $tenant, $service, $accountContext);
 
         if ($snapshot === null) {
             // Shouldn't happen, but fallback to confirmation
@@ -246,17 +258,17 @@ class BookingCalendar extends Component
             return;
         }
 
-        $stripeService = app(StripeService::class, ['apiKeyOrClient' => $tenant->stripe_api_key]);
+        $stripeService = app(StripeService::class, ['apiKeyOrClient' => $accountContext->apiKey]);
 
-        $result = $stripeService->createPaymentIntent(
-            amountCents: $snapshot['amount_cents'],
-            currency: $snapshot['currency'],
-            metadata: [
-                'booking_id' => $booking->id,
-                'tenant_id' => $tenant->id,
-                'guest_email' => $this->guestEmail,
-            ],
-        );
+        $metadata = [
+            'booking_id' => $booking->id,
+            'tenant_id' => $tenant->id,
+            'guest_email' => $this->guestEmail,
+        ];
+
+        $result = $snapshot['stripe_options'] === []
+            ? $stripeService->createPaymentIntent($snapshot['amount_cents'], $snapshot['currency'], $metadata)
+            : $stripeService->createPaymentIntent($snapshot['amount_cents'], $snapshot['currency'], $metadata, $snapshot['stripe_options']);
 
         // Store PaymentIntent ID on the booking
         $booking->update(['stripe_payment_intent_id' => $result->id]);

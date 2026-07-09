@@ -9,6 +9,7 @@ use App\Models\BookingHold;
 use App\Models\Service;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Stripe\StripeAccountContext;
 use App\Support\Currency;
 use Carbon\Carbon;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -119,7 +120,7 @@ class BookingService
         };
     }
 
-    public function snapshotPaymentForStripe(Booking $booking, Tenant $tenant, Service $service): ?array
+    public function snapshotPaymentForStripe(Booking $booking, Tenant $tenant, Service $service, ?StripeAccountContext $accountContext = null): ?array
     {
         if ($booking->tenant_id !== $tenant->id || $service->tenant_id !== $tenant->id || $booking->service_id !== $service->id) {
             abort(404);
@@ -133,14 +134,22 @@ class BookingService
 
         $currency = Currency::normalize($tenant->currency());
 
-        $booking->update([
+        $snapshot = [
             'payment_amount_cents' => $amountCents,
             'payment_currency' => $currency,
-        ]);
+        ];
+
+        if ($accountContext !== null) {
+            $snapshot['payment_account_mode'] = $accountContext->mode;
+            $snapshot['stripe_connected_account_id'] = $accountContext->connectedAccountId;
+        }
+
+        $booking->update($snapshot);
 
         return [
             'amount_cents' => $amountCents,
             'currency' => $currency,
+            'stripe_options' => $accountContext?->stripeOptions() ?? [],
         ];
     }
 

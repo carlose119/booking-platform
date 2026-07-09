@@ -30,6 +30,8 @@ class Booking extends Model
         'payment_amount_cents',
         'payment_currency',
         'stripe_payment_intent_id',
+        'payment_account_mode',
+        'stripe_connected_account_id',
         'notification_channel',
         'notes',
         'cancelled_at',
@@ -51,6 +53,7 @@ class Booking extends Model
             'reminded_at' => 'datetime',
             'payment_amount_cents' => 'integer',
             'payment_currency' => 'string',
+            'payment_account_mode' => 'string',
         ];
     }
 
@@ -77,6 +80,25 @@ class Booking extends Model
         }
 
         return $this->service?->price_cents;
+    }
+
+    public function resolvedPaymentAccountMode(): string
+    {
+        return $this->payment_account_mode ?? Tenant::PAYMENT_ACCOUNT_DIRECT;
+    }
+
+    public function resolvedStripeConnectedAccountId(): ?string
+    {
+        if ($this->resolvedPaymentAccountMode() !== Tenant::PAYMENT_ACCOUNT_CONNECT) {
+            return null;
+        }
+
+        return $this->stripe_connected_account_id ?: $this->tenant?->stripe_connected_account_id;
+    }
+
+    public function usesStripeConnectSnapshot(): bool
+    {
+        return $this->resolvedPaymentAccountMode() === Tenant::PAYMENT_ACCOUNT_CONNECT;
     }
 
     public function tenant(): BelongsTo

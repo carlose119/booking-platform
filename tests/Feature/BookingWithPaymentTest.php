@@ -240,6 +240,142 @@ class BookingWithPaymentTest extends TestCase
         ]);
     }
 
+    public function test_connect_booking_creates_payment_intent_with_connected_account_and_snapshots_context(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_platform']);
+
+        $futureThursday = Carbon::now()->addWeek()->startOfWeek()->addDays(3);
+
+        $tenant = Tenant::create([
+            'name' => 'Connect Salon',
+            'slug' => 'connect-salon',
+            'payment_policy' => '100upfront',
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_connect_123',
+            'stripe_connect_charges_enabled' => true,
+        ]);
+
+        $employee = User::create([
+            'tenant_id' => $tenant->id,
+            'name' => 'Jane Doe',
+            'email' => fake()->unique()->safeEmail(),
+            'password' => bcrypt('password'),
+            'role' => 'employee',
+        ]);
+
+        $service = Service::create([
+            'tenant_id' => $tenant->id,
+            'name' => 'Haircut',
+            'price_cents' => 5000,
+            'duration_minutes' => 60,
+            'active' => true,
+        ]);
+        $service->employees()->attach($employee->id);
+
+        EmployeeSchedule::create([
+            'employee_id' => $employee->id,
+            'day_of_week' => $futureThursday->dayOfWeekIso,
+            'start_time' => '10:00',
+            'end_time' => '13:00',
+        ]);
+
+        $stripeMock = Mockery::mock(StripeService::class);
+        $stripeMock->shouldReceive('createPaymentIntent')
+            ->once()
+            ->with(5000, 'usd', Mockery::on(fn (array $metadata): bool => $metadata['tenant_id'] === $tenant->id
+                && $metadata['guest_email'] === 'john@example.com'
+            ), ['stripe_account' => 'acct_connect_123'])
+            ->andReturn(new PaymentIntentResult(
+                id: 'pi_test_connect_123',
+                clientSecret: 'cs_test_connect_secret',
+                amount: 5000,
+                status: 'requires_payment_method',
+            ));
+
+        $this->app->bind(StripeService::class, fn () => $stripeMock);
+
+        Livewire::test(BookingCalendar::class, ['tenantId' => $tenant->id])
+            ->set('selectedService', $service->id)
+            ->set('selectedDate', $futureThursday->toDateString())
+            ->call('selectSlot', $employee->id, '10:00', '11:00')
+            ->set('guestName', 'John Doe')
+            ->set('guestEmail', 'john@example.com')
+            ->set('guestPhone', '+1 555 123 456')
+            ->call('submitGuestForm')
+            ->assertSet('currentStep', 3)
+            ->assertSee('$50.00');
+
+        $this->assertDatabaseHas('bookings', [
+            'tenant_id' => $tenant->id,
+            'stripe_payment_intent_id' => 'pi_test_connect_123',
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_connect_123',
+        ]);
+    }
+
+    public function test_connect_booking_without_active_charges_does_not_create_payment_intent(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_platform']);
+
+        $futureThursday = Carbon::now()->addWeek()->startOfWeek()->addDays(3);
+
+        $tenant = Tenant::create([
+            'name' => 'Unready Connect Salon',
+            'slug' => 'unready-connect-salon',
+            'payment_policy' => '100upfront',
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_connect_123',
+            'stripe_connect_charges_enabled' => false,
+        ]);
+
+        $employee = User::create([
+            'tenant_id' => $tenant->id,
+            'name' => 'Jane Doe',
+            'email' => fake()->unique()->safeEmail(),
+            'password' => bcrypt('password'),
+            'role' => 'employee',
+        ]);
+
+        $service = Service::create([
+            'tenant_id' => $tenant->id,
+            'name' => 'Haircut',
+            'price_cents' => 5000,
+            'duration_minutes' => 60,
+            'active' => true,
+        ]);
+        $service->employees()->attach($employee->id);
+
+        EmployeeSchedule::create([
+            'employee_id' => $employee->id,
+            'day_of_week' => $futureThursday->dayOfWeekIso,
+            'start_time' => '10:00',
+            'end_time' => '13:00',
+        ]);
+
+        $stripeMock = Mockery::mock(StripeService::class);
+        $stripeMock->shouldNotReceive('createPaymentIntent');
+        $this->app->bind(StripeService::class, fn () => $stripeMock);
+
+        Livewire::test(BookingCalendar::class, ['tenantId' => $tenant->id])
+            ->set('selectedService', $service->id)
+            ->set('selectedDate', $futureThursday->toDateString())
+            ->call('selectSlot', $employee->id, '10:00', '11:00')
+            ->set('guestName', 'John Doe')
+            ->set('guestEmail', 'john@example.com')
+            ->set('guestPhone', '+1 555 123 456')
+            ->call('submitGuestForm')
+            ->assertSet('currentStep', 2)
+            ->assertSee('Payments are not available for this business yet.');
+
+        $this->assertDatabaseHas('bookings', [
+            'tenant_id' => $tenant->id,
+            'client_name' => 'John Doe',
+            'status' => 'pending',
+            'payment_status' => 'unpaid',
+            'stripe_payment_intent_id' => null,
+        ]);
+    }
+
     public function test_public_booking_service_list_uses_tenant_currency_display(): void
     {
         $tenant = Tenant::create([

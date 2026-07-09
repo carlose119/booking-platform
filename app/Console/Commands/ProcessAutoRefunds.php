@@ -3,7 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Booking;
-use App\Models\Tenant;
+use App\Services\Stripe\StripeAccountResolver;
 use App\Services\StripeService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -28,7 +28,7 @@ class ProcessAutoRefunds extends Command
         foreach ($bookings as $booking) {
             $tenant = $booking->tenant;
 
-            if (! $tenant || ! $tenant->stripe_api_key) {
+            if (! $tenant) {
                 continue;
             }
 
@@ -39,8 +39,23 @@ class ProcessAutoRefunds extends Command
             }
 
             try {
-                $stripeService = app(StripeService::class, ['apiKeyOrClient' => $tenant->stripe_api_key]);
-                $stripeService->createRefund($booking->stripe_payment_intent_id);
+                $accountContext = app(StripeAccountResolver::class)->forBookingRefund($booking);
+
+                if (blank($accountContext->apiKey)) {
+                    continue;
+                }
+
+                $stripeService = app(StripeService::class, ['apiKeyOrClient' => $accountContext->apiKey]);
+                $stripeOptions = array_merge(
+                    $accountContext->stripeOptions(),
+                    ['idempotency_key' => "booking:auto-refund:{$booking->id}:{$booking->stripe_payment_intent_id}"]
+                );
+
+                $stripeService->createRefund(
+                    $booking->stripe_payment_intent_id,
+                    null,
+                    $stripeOptions,
+                );
 
                 $booking->update(['payment_status' => 'refunded']);
                 $refunded++;

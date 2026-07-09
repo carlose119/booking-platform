@@ -4,8 +4,11 @@ namespace Tests\Feature;
 
 use App\Jobs\ProcessWebhook;
 use App\Models\Tenant;
+use App\Services\Stripe\StripeAccountResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Log;
+use Mockery;
 use Tests\TestCase;
 
 class WebhookControllerTest extends TestCase
@@ -64,8 +67,152 @@ class WebhookControllerTest extends TestCase
         $response->assertJson(['received' => true]);
 
         Bus::assertDispatched(ProcessWebhook::class, function ($job) {
-            return $job->eventId === 'evt_test_123' && $job->tenantId === $this->tenant->id;
+            return $job->eventId === 'evt_test_123'
+                && $job->tenantId === $this->tenant->id
+                && $job->connectedAccountId === null
+                && $job->accountMode === Tenant::PAYMENT_ACCOUNT_DIRECT;
         });
+    }
+
+    public function test_connect_webhook_resolves_connected_account_and_dispatches_scoped_job(): void
+    {
+        config(['services.stripe.connect_webhook_secret' => 'whsec_connect_secret']);
+        Bus::fake();
+
+        $tenant = Tenant::create([
+            'name' => 'Connect Webhook Salon',
+            'slug' => 'connect-webhook-salon',
+            'payment_policy' => '100upfront',
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_connect_123',
+        ]);
+
+        $payload = json_encode([
+            'id' => 'evt_connect_123',
+            'account' => 'acct_connect_123',
+            'type' => 'payment_intent.succeeded',
+            'data' => [
+                'object' => [
+                    'id' => 'pi_test_connect_456',
+                    'amount' => 5000,
+                    'status' => 'succeeded',
+                ],
+            ],
+        ]);
+
+        $signature = $this->generateStripeSignature($payload, 'whsec_connect_secret');
+
+        $response = $this->call(
+            'POST',
+            '/webhooks/stripe/connect',
+            [],
+            [],
+            [],
+            [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_STRIPE_SIGNATURE' => $signature,
+            ],
+            $payload
+        );
+
+        $response->assertStatus(200);
+        $response->assertJson(['received' => true]);
+
+        Bus::assertDispatched(ProcessWebhook::class, function ($job) use ($tenant) {
+            return $job->eventId === 'evt_connect_123'
+                && $job->tenantId === $tenant->id
+                && $job->connectedAccountId === 'acct_connect_123';
+        });
+    }
+
+    public function test_connect_webhook_with_unknown_account_returns_400_without_dispatch(): void
+    {
+        config(['services.stripe.connect_webhook_secret' => 'whsec_connect_secret']);
+        Bus::fake();
+        Log::spy();
+
+        $payload = json_encode([
+            'id' => 'evt_connect_unknown',
+            'account' => 'acct_missing',
+            'type' => 'payment_intent.succeeded',
+        ]);
+
+        $signature = $this->generateStripeSignature($payload, 'whsec_connect_secret');
+
+        $response = $this->call(
+            'POST',
+            '/webhooks/stripe/connect',
+            [],
+            [],
+            [],
+            [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_STRIPE_SIGNATURE' => $signature,
+            ],
+            $payload
+        );
+
+        $response->assertStatus(400);
+        $response->assertJson(['error' => 'Unresolved connected account']);
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->with('Stripe Connect webhook account could not be resolved.', Mockery::on(
+                fn (array $context) => $context['reason'] === 'unknown_account'
+                    && $context['connected_account_id'] === 'acct_missing'
+                    && $context['event_id'] === 'evt_connect_unknown'
+            ));
+
+        Bus::assertNotDispatched(ProcessWebhook::class);
+    }
+
+    public function test_connect_webhook_with_ambiguous_account_returns_400_without_dispatch(): void
+    {
+        config(['services.stripe.connect_webhook_secret' => 'whsec_connect_secret']);
+        Bus::fake();
+        Log::spy();
+
+        $resolver = Mockery::mock(StripeAccountResolver::class);
+        $resolver->shouldReceive('connectedAccountTenantCount')
+            ->once()
+            ->with('acct_duplicate')
+            ->andReturn(2);
+        $resolver->shouldReceive('tenantForConnectedAccount')
+            ->never();
+        $this->app->instance(StripeAccountResolver::class, $resolver);
+
+        $payload = json_encode([
+            'id' => 'evt_connect_ambiguous',
+            'account' => 'acct_duplicate',
+            'type' => 'payment_intent.succeeded',
+        ]);
+
+        $response = $this->call(
+            'POST',
+            '/webhooks/stripe/connect',
+            [],
+            [],
+            [],
+            [
+                'CONTENT_TYPE' => 'application/json',
+                'HTTP_STRIPE_SIGNATURE' => $this->generateStripeSignature($payload, 'whsec_connect_secret'),
+            ],
+            $payload
+        );
+
+        $response->assertStatus(400);
+        $response->assertJson(['error' => 'Unresolved connected account']);
+
+        Log::shouldHaveReceived('warning')
+            ->once()
+            ->with('Stripe Connect webhook account could not be resolved.', Mockery::on(
+                fn (array $context) => $context['reason'] === 'ambiguous_account'
+                    && $context['connected_account_id'] === 'acct_duplicate'
+                    && $context['matching_tenant_count'] === 2
+                    && $context['event_id'] === 'evt_connect_ambiguous'
+            ));
+
+        Bus::assertNotDispatched(ProcessWebhook::class);
     }
 
     // ─── Webhook with invalid signature returns 400 ──────────────────────

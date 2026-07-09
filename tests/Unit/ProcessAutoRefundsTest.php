@@ -6,8 +6,10 @@ use App\Models\Booking;
 use App\Models\Service;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\DTOs\RefundResult;
 use App\Services\StripeService;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Mockery;
 use Stripe\Refund;
@@ -74,7 +76,7 @@ class ProcessAutoRefundsTest extends TestCase
      * Directly query the same way ProcessAutoRefunds does, to test the logic
      * without the command wrapper (avoids SQLite transaction nesting).
      */
-    private function getRefundableBookings(): \Illuminate\Database\Eloquent\Collection
+    private function getRefundableBookings(): Collection
     {
         return Booking::where('status', 'cancelled')
             ->whereIn('payment_status', ['paid', 'partial'])
@@ -100,9 +102,7 @@ class ProcessAutoRefundsTest extends TestCase
         $mockRefunds = Mockery::mock();
         $mockRefunds->shouldReceive('create')
             ->once()
-            ->with(Mockery::on(fn ($params) =>
-                $params['payment_intent'] === 'pi_test_refund_123'
-            ))
+            ->with(Mockery::on(fn ($params) => $params['payment_intent'] === 'pi_test_refund_123'))
             ->andReturn($refund);
 
         $mockClient = Mockery::mock(StripeClient::class);
@@ -138,9 +138,10 @@ class ProcessAutoRefundsTest extends TestCase
         $mockRefunds = Mockery::mock();
         $mockRefunds->shouldReceive('create')
             ->once()
-            ->with(Mockery::on(fn ($params) =>
-                $params['payment_intent'] === 'pi_test_refund_123'
-            ))
+            ->with(
+                Mockery::on(fn ($params) => $params['payment_intent'] === 'pi_test_refund_123'),
+                Mockery::on(fn (array $options) => str_starts_with($options['idempotency_key'] ?? '', 'booking:auto-refund:'))
+            )
             ->andReturn($refund);
 
         $mockClient = Mockery::mock(StripeClient::class);
@@ -170,9 +171,10 @@ class ProcessAutoRefundsTest extends TestCase
         $mockRefunds = Mockery::mock();
         $mockRefunds->shouldReceive('create')
             ->once()
-            ->with(Mockery::on(fn ($params) =>
-                $params['payment_intent'] === 'pi_test_refund_123'
-            ))
+            ->with(
+                Mockery::on(fn ($params) => $params['payment_intent'] === 'pi_test_refund_123'),
+                Mockery::on(fn (array $options) => str_starts_with($options['idempotency_key'] ?? '', 'booking:auto-refund:'))
+            )
             ->andReturn($refund);
 
         $mockClient = Mockery::mock(StripeClient::class);
@@ -186,6 +188,111 @@ class ProcessAutoRefundsTest extends TestCase
 
         $this->artisan('booking:auto-refund')
             ->expectsOutput('Processed 0 auto-refund(s).')
+            ->assertSuccessful();
+
+        $booking->refresh();
+        $this->assertEquals('refunded', $booking->payment_status);
+    }
+
+    public function test_connect_booking_refund_uses_original_connected_account_snapshot(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_platform']);
+
+        $tenant = $this->createTenantWithStripe([
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_current',
+            'stripe_connect_charges_enabled' => true,
+        ]);
+        $booking = $this->createCancelledPaidBooking($tenant, Carbon::now()->subHours(12));
+        $booking->update([
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_original',
+        ]);
+
+        $stripeMock = Mockery::mock(StripeService::class);
+        $stripeMock->shouldReceive('createRefund')
+            ->once()
+            ->with(
+                'pi_test_refund_123',
+                null,
+                Mockery::on(fn (array $options) => $options['stripe_account'] === 'acct_original'
+                    && str_starts_with($options['idempotency_key'] ?? '', 'booking:auto-refund:'))
+            )
+            ->andReturn(new RefundResult(
+                id: 're_test_connect_123',
+                status: 'succeeded',
+                amount: 5000,
+            ));
+
+        $this->app->bind(StripeService::class, fn () => $stripeMock);
+
+        $this->artisan('booking:auto-refund')
+            ->expectsOutput('Processed 1 auto-refund(s).')
+            ->assertSuccessful();
+
+        $booking->refresh();
+        $this->assertEquals('refunded', $booking->payment_status);
+    }
+
+    public function test_legacy_direct_booking_refund_does_not_use_current_connect_account_after_migration(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_platform']);
+
+        $tenant = $this->createTenantWithStripe([
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_current_after_migration',
+            'stripe_connect_charges_enabled' => true,
+        ]);
+        $booking = $this->createCancelledPaidBooking($tenant, Carbon::now()->subHours(12));
+
+        $stripeMock = Mockery::mock(StripeService::class);
+        $stripeMock->shouldReceive('createRefund')
+            ->once()
+            ->with(
+                'pi_test_refund_123',
+                null,
+                Mockery::on(fn (array $options) => ! array_key_exists('stripe_account', $options)
+                    && ($options['idempotency_key'] ?? null) === "booking:auto-refund:{$booking->id}:pi_test_refund_123")
+            )
+            ->andReturn(new RefundResult(
+                id: 're_test_legacy_direct_123',
+                status: 'succeeded',
+                amount: 5000,
+            ));
+
+        $this->app->bind(StripeService::class, fn () => $stripeMock);
+
+        $this->artisan('booking:auto-refund')
+            ->expectsOutput('Processed 1 auto-refund(s).')
+            ->assertSuccessful();
+
+        $booking->refresh();
+        $this->assertEquals('refunded', $booking->payment_status);
+    }
+
+    public function test_auto_refund_uses_stable_idempotency_key_for_retry_safety(): void
+    {
+        $tenant = $this->createTenantWithStripe();
+        $booking = $this->createCancelledPaidBooking($tenant, Carbon::now()->subHours(12));
+
+        $stripeMock = Mockery::mock(StripeService::class);
+        $stripeMock->shouldReceive('createRefund')
+            ->once()
+            ->with(
+                'pi_test_refund_123',
+                null,
+                Mockery::on(fn (array $options) => ($options['idempotency_key'] ?? null) === "booking:auto-refund:{$booking->id}:pi_test_refund_123")
+            )
+            ->andReturn(new RefundResult(
+                id: 're_test_idempotent_123',
+                status: 'succeeded',
+                amount: 5000,
+            ));
+
+        $this->app->bind(StripeService::class, fn () => $stripeMock);
+
+        $this->artisan('booking:auto-refund')
+            ->expectsOutput('Processed 1 auto-refund(s).')
             ->assertSuccessful();
 
         $booking->refresh();

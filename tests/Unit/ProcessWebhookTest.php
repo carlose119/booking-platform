@@ -106,6 +106,126 @@ class ProcessWebhookTest extends TestCase
         $this->assertEquals('confirmed', $booking->status);
     }
 
+    public function test_connect_payment_succeeded_retrieves_event_with_account_options_and_scopes_booking_lookup(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_platform']);
+
+        $tenant = Tenant::create([
+            'name' => 'Connect Salon',
+            'slug' => 'connect-salon',
+            'payment_policy' => '100upfront',
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_connect_123',
+            'stripe_connect_charges_enabled' => true,
+        ]);
+        $booking = $this->createBookingWithIntent($tenant);
+        $booking->update([
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_connect_123',
+        ]);
+
+        $otherTenant = $this->createTenantWithStripe();
+        $otherBooking = $this->createBookingWithIntent($otherTenant);
+
+        $mockEvents = Mockery::mock();
+        $mockEvents->shouldReceive('retrieve')
+            ->once()
+            ->with('evt_connect_123', ['stripe_account' => 'acct_connect_123'])
+            ->andReturn((object) [
+                'type' => 'payment_intent.succeeded',
+                'data' => (object) ['object' => (object) ['id' => 'pi_test_webhook_123']],
+            ]);
+
+        $mockClient = Mockery::mock(StripeClient::class);
+        $mockClient->events = $mockEvents;
+        $this->app->bind(StripeService::class, fn () => new StripeService($mockClient));
+
+        (new ProcessWebhook('evt_connect_123', $tenant->id, 'acct_connect_123'))->handle();
+
+        $booking->refresh();
+        $otherBooking->refresh();
+
+        $this->assertEquals('paid', $booking->payment_status);
+        $this->assertEquals('confirmed', $booking->status);
+        $this->assertEquals('unpaid', $otherBooking->payment_status);
+        $this->assertEquals('pending', $otherBooking->status);
+    }
+
+    public function test_connect_webhook_job_uses_original_connected_account_when_tenant_account_changes_before_processing(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_platform']);
+
+        $tenant = Tenant::create([
+            'name' => 'Connect Salon Drift',
+            'slug' => 'connect-salon-drift',
+            'payment_policy' => '100upfront',
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_current_after_dispatch',
+            'stripe_connect_charges_enabled' => true,
+        ]);
+        $booking = $this->createBookingWithIntent($tenant);
+        $booking->update([
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_original_from_event',
+        ]);
+
+        $mockEvents = Mockery::mock();
+        $mockEvents->shouldReceive('retrieve')
+            ->once()
+            ->with('evt_connect_original', ['stripe_account' => 'acct_original_from_event'])
+            ->andReturn((object) [
+                'type' => 'payment_intent.succeeded',
+                'data' => (object) ['object' => (object) ['id' => 'pi_test_webhook_123']],
+            ]);
+
+        $mockClient = Mockery::mock(StripeClient::class);
+        $mockClient->events = $mockEvents;
+        $this->app->bind(StripeService::class, fn () => new StripeService($mockClient));
+
+        (new ProcessWebhook('evt_connect_original', $tenant->id, 'acct_original_from_event'))->handle();
+
+        $booking->refresh();
+
+        $this->assertEquals('paid', $booking->payment_status);
+        $this->assertEquals('confirmed', $booking->status);
+    }
+
+    public function test_direct_webhook_job_uses_direct_context_when_tenant_migrates_to_connect_before_processing(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_platform']);
+
+        $tenant = $this->createTenantWithStripe();
+        $booking = $this->createBookingWithIntent($tenant);
+
+        $job = new ProcessWebhook('evt_direct_before_migration', $tenant->id, null, Tenant::PAYMENT_ACCOUNT_DIRECT);
+
+        $tenant->update([
+            'payment_account_mode' => 'connect',
+            'stripe_connected_account_id' => 'acct_current_after_migration',
+            'stripe_connect_charges_enabled' => true,
+        ]);
+
+        $mockEvents = Mockery::mock();
+        $mockEvents->shouldReceive('retrieve')
+            ->once()
+            ->with('evt_direct_before_migration')
+            ->andReturn((object) [
+                'type' => 'payment_intent.succeeded',
+                'data' => (object) ['object' => (object) ['id' => 'pi_test_webhook_123']],
+            ]);
+
+        $mockClient = Mockery::mock(StripeClient::class);
+        $mockClient->events = $mockEvents;
+        $this->app->bind(StripeService::class, fn () => new StripeService($mockClient));
+
+        $job->handle();
+
+        $booking->refresh();
+
+        $this->assertEquals('paid', $booking->payment_status);
+        $this->assertEquals('confirmed', $booking->status);
+    }
+
     // ─── payment_intent.payment_failed leaves booking unpaid ──────────────
 
     public function test_payment_failed_leaves_booking_unpaid(): void
@@ -155,6 +275,7 @@ class ProcessWebhookTest extends TestCase
     public function test_unknown_booking_handled_gracefully(): void
     {
         $tenant = $this->createTenantWithStripe();
+        $bookingCountBefore = Booking::count();
 
         $mockClient = $this->mockStripeEvent('evt_test_unknown', 'payment_intent.succeeded', (object) [
             'id' => 'pi_nonexistent',
@@ -167,6 +288,10 @@ class ProcessWebhookTest extends TestCase
         // Should not throw — logs warning and returns
         $job->handle();
 
-        $this->assertTrue(true); // No exception thrown
+        $this->assertSame($bookingCountBefore, Booking::count());
+        $this->assertDatabaseMissing('bookings', [
+            'stripe_payment_intent_id' => 'pi_nonexistent',
+            'payment_status' => 'paid',
+        ]);
     }
 }

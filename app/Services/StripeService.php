@@ -24,9 +24,13 @@ class StripeService
      *
      * @throws ApiErrorException
      */
-    public function retrieveEvent(string $eventId): object
+    public function retrieveEvent(string $eventId, array $stripeOptions = []): object
     {
-        return $this->client->events->retrieve($eventId);
+        if ($stripeOptions === []) {
+            return $this->client->events->retrieve($eventId);
+        }
+
+        return $this->client->events->retrieve($eventId, $stripeOptions);
     }
 
     /**
@@ -34,15 +38,19 @@ class StripeService
      *
      * @throws ApiErrorException
      */
-    public function createPaymentIntent(int $amountCents, string $currency, array $metadata = []): PaymentIntentResult
+    public function createPaymentIntent(int $amountCents, string $currency, array $metadata = [], array $stripeOptions = []): PaymentIntentResult
     {
         $currency = Currency::ensureSupportedForStripe($currency);
 
-        $paymentIntent = $this->client->paymentIntents->create([
+        $params = [
             'amount' => $amountCents,
             'currency' => $currency,
             'metadata' => $metadata,
-        ]);
+        ];
+
+        $paymentIntent = $stripeOptions === []
+            ? $this->client->paymentIntents->create($params)
+            : $this->client->paymentIntents->create($params, $stripeOptions);
 
         return new PaymentIntentResult(
             id: $paymentIntent->id,
@@ -57,7 +65,7 @@ class StripeService
      *
      * @throws ApiErrorException
      */
-    public function createRefund(string $paymentIntentId, ?int $amountCents = null): RefundResult
+    public function createRefund(string $paymentIntentId, ?int $amountCents = null, array $stripeOptions = []): RefundResult
     {
         $params = ['payment_intent' => $paymentIntentId];
 
@@ -65,7 +73,9 @@ class StripeService
             $params['amount'] = $amountCents;
         }
 
-        $refund = $this->client->refunds->create($params);
+        $refund = $stripeOptions === []
+            ? $this->client->refunds->create($params)
+            : $this->client->refunds->create($params, $stripeOptions);
 
         return new RefundResult(
             id: $refund->id,

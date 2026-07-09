@@ -46,4 +46,9 @@ return [
         'secret' => env('MAILGUN_SECRET'),
     ],
 
+    'stripe' => [
+        'secret' => env('STRIPE_SECRET'),
+        'connect_webhook_secret' => env('STRIPE_CONNECT_WEBHOOK_SECRET'),
+    ],
+
 ];
