@@ -2,8 +2,8 @@
 
 namespace App\Notifications;
 
+use App\Channels\SmsChannel;
 use App\Models\Booking;
-use App\Models\User;
 use App\Notifications\Messages\SmsMessage;
 use Illuminate\Bus\Queueable;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -22,40 +22,51 @@ class BookingRescheduled extends Notification
     /**
      * Determine which notification channels to use based on user preference.
      */
-    public function via(User $notifiable): array
+    public function via(object $notifiable): array
     {
-        return match ($notifiable->notification_channel ?? 'email') {
+        return match ($this->normalizeNotificationChannel($notifiable->notification_channel ?? null)) {
             'email' => ['mail'],
-            'sms' => [\App\Channels\SmsChannel::class],
-            'both' => ['mail', \App\Channels\SmsChannel::class],
-            default => ['mail'],
+            'sms' => [SmsChannel::class],
+            'both' => ['mail', SmsChannel::class],
+            default => [],
         };
+    }
+
+    private function normalizeNotificationChannel(?string $channel): ?string
+    {
+        if ($channel === null || trim($channel) === '') {
+            return 'email';
+        }
+
+        $normalized = strtolower(trim($channel));
+
+        return in_array($normalized, ['email', 'sms', 'both'], true) ? $normalized : null;
     }
 
     /**
      * Get the mail representation of the notification.
      */
-    public function toMail(User $notifiable): MailMessage
+    public function toMail(object $notifiable): MailMessage
     {
         $service = $this->booking->service;
         $tenant = $this->booking->tenant;
 
         return (new MailMessage)
             ->subject("Booking Rescheduled - {$tenant->name}")
-            ->line("Your booking has been rescheduled.")
+            ->line('Your booking has been rescheduled.')
             ->line("Service: {$service->name}")
             ->line("Original Date: {$this->originalDate}")
             ->line("Original Time: {$this->originalTime}")
             ->line("New Date: {$this->booking->date->format('F j, Y')}")
             ->line("New Time: {$this->booking->start_time->format('g:i A')} - {$this->booking->end_time->format('g:i A')}")
             ->line("Business: {$tenant->name}")
-            ->line("If you have any questions, please contact the business directly.");
+            ->line('If you have any questions, please contact the business directly.');
     }
 
     /**
      * Get the SMS representation of the notification.
      */
-    public function toSms(User $notifiable): SmsMessage
+    public function toSms(object $notifiable): SmsMessage
     {
         $service = $this->booking->service;
         $tenant = $this->booking->tenant;

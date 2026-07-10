@@ -2,15 +2,16 @@
 
 namespace Tests\Feature;
 
+use App\Enums\UserRole;
 use App\Jobs\SendBookingNotification;
 use App\Models\Booking;
 use App\Models\Service;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Notifications\BookingCancelled;
+use App\Notifications\BookingRecipient;
 use App\Services\BookingService;
 use App\Services\NotificationService;
-use App\Enums\UserRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Queue;
@@ -22,7 +23,9 @@ class NotificationDispatchTest extends TestCase
     use RefreshDatabase;
 
     protected Tenant $tenant;
+
     protected Service $service;
+
     protected User $client;
 
     protected function setUp(): void
@@ -257,7 +260,11 @@ class NotificationDispatchTest extends TestCase
         (new SendBookingNotification($cancelled, 'cancelled', 'Staff unavailable'))
             ->handle(app(NotificationService::class));
 
-        Notification::assertNothingSent();
+        Notification::assertSentTo(
+            BookingRecipient::fromBooking($cancelled),
+            BookingCancelled::class,
+            fn ($notification, array $channels): bool => $channels === ['mail']
+        );
     }
 
     public function test_cancelled_notification_includes_refund_info_for_partial_payment(): void

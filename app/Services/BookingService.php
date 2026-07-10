@@ -66,6 +66,8 @@ class BookingService
         string $clientPhone,
         ?string $notificationChannel = null,
     ): Booking {
+        $notificationChannel = $this->normalizeNotificationChannel($notificationChannel);
+
         $hold = BookingHold::where('tenant_id', $tenantId)
             ->findOrFail($holdId);
 
@@ -92,7 +94,7 @@ class BookingService
             'end_time' => $hold->end_time,
             'status' => $status,
             'payment_status' => $paymentStatus,
-            'notification_channel' => $notificationChannel ?? 'email',
+            'notification_channel' => $notificationChannel,
         ]);
 
         $hold->delete();
@@ -288,5 +290,20 @@ class BookingService
             '100upfront', 'fraction' => 'unpaid', // awaiting payment via Stripe
             default => 'unpaid',
         };
+    }
+
+    private function normalizeNotificationChannel(?string $channel): string
+    {
+        if ($channel === null || trim($channel) === '') {
+            return 'email';
+        }
+
+        $normalized = strtolower(trim($channel));
+
+        if (! in_array($normalized, ['email', 'sms', 'both'], true)) {
+            abort(422, 'Invalid notification channel.');
+        }
+
+        return $normalized;
     }
 }

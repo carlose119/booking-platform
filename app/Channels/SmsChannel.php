@@ -2,7 +2,6 @@
 
 namespace App\Channels;
 
-use App\Models\User;
 use Illuminate\Notifications\Notification;
 use Twilio\Rest\Client;
 
@@ -11,7 +10,7 @@ class SmsChannel
     /**
      * Send the given notification via SMS.
      */
-    public function send(User $notifiable, Notification $notification): void
+    public function send(object $notifiable, Notification $notification): void
     {
         $message = $notification->toSms($notifiable);
 
@@ -27,19 +26,23 @@ class SmsChannel
             return;
         }
 
-        if (! $notifiable->phone) {
+        $phone = method_exists($notifiable, 'routeNotificationForSms')
+            ? $notifiable->routeNotificationForSms()
+            : ($notifiable->phone ?? null);
+
+        if (! $phone) {
             // User has no phone number — fail silently
             return;
         }
 
-        $client = new Client($sid, $authToken);
+        $this->sendSmsMessage($phone, [
+            'from' => $fromNumber,
+            'body' => $message->body,
+        ], $sid, $authToken);
+    }
 
-        $client->messages->create(
-            $notifiable->phone,
-            [
-                'from' => $fromNumber,
-                'body' => $message->body,
-            ]
-        );
+    protected function sendSmsMessage(string $phone, array $payload, string $sid, string $authToken): void
+    {
+        (new Client($sid, $authToken))->messages->create($phone, $payload);
     }
 }

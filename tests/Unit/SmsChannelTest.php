@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Channels\SmsChannel;
+use App\Models\Booking;
 use App\Models\Service;
 use App\Models\Tenant;
 use App\Models\User;
@@ -17,7 +18,9 @@ class SmsChannelTest extends TestCase
     use RefreshDatabase;
 
     protected Tenant $tenant;
+
     protected Service $service;
+
     protected User $user;
 
     protected function setUp(): void
@@ -60,7 +63,7 @@ class SmsChannelTest extends TestCase
         $notification->shouldReceive('toSms')
             ->andReturn((new SmsMessage)->body('Test message'));
 
-        $channel = new SmsChannel();
+        $channel = new SmsChannel;
         $channel->send($this->user, $notification);
 
         // No exception means success - Twilio not configured, silently fails
@@ -75,7 +78,7 @@ class SmsChannelTest extends TestCase
         $notification->shouldReceive('toSms')
             ->andReturn((new SmsMessage)->body('Test message'));
 
-        $channel = new SmsChannel();
+        $channel = new SmsChannel;
         $channel->send($this->user, $notification);
 
         // No exception means success - no phone, silently fails
@@ -84,7 +87,7 @@ class SmsChannelTest extends TestCase
 
     public function test_sms_message_contains_booking_details(): void
     {
-        $booking = \App\Models\Booking::create([
+        $booking = Booking::create([
             'tenant_id' => $this->tenant->id,
             'service_id' => $this->service->id,
             'client_name' => 'John Doe',
@@ -103,5 +106,46 @@ class SmsChannelTest extends TestCase
         $this->assertInstanceOf(SmsMessage::class, $message);
         $this->assertStringContainsString('Booking Confirmed', $message->body);
         $this->assertStringContainsString('Test Salon', $message->body);
+    }
+
+    public function test_sms_channel_uses_generic_notifiable_sms_route(): void
+    {
+        $notifiable = new class($this->tenant)
+        {
+            public string $phone = '+15550000000';
+
+            public function __construct(public Tenant $tenant) {}
+
+            public function routeNotificationForSms(): string
+            {
+                return '+15551112222';
+            }
+        };
+
+        $notification = Mockery::mock(BookingConfirmed::class);
+        $notification->shouldReceive('toSms')
+            ->with($notifiable)
+            ->andReturn((new SmsMessage)->body('Generic notifiable message'));
+
+        $channel = new class extends SmsChannel
+        {
+            public ?string $phone = null;
+
+            public ?array $payload = null;
+
+            protected function sendSmsMessage(string $phone, array $payload, string $sid, string $authToken): void
+            {
+                $this->phone = $phone;
+                $this->payload = $payload;
+            }
+        };
+
+        $channel->send($notifiable, $notification);
+
+        $this->assertSame('+15551112222', $channel->phone);
+        $this->assertSame([
+            'from' => '+15551234567',
+            'body' => 'Generic notifiable message',
+        ], $channel->payload);
     }
 }

@@ -7,9 +7,9 @@ use App\Models\Booking;
 use App\Models\User;
 use App\Notifications\BookingCancelled;
 use App\Notifications\BookingConfirmed;
+use App\Notifications\BookingRecipient;
 use App\Notifications\BookingReminder;
 use App\Notifications\BookingRescheduled;
-use Illuminate\Support\Facades\Notification;
 
 class NotificationService
 {
@@ -18,12 +18,12 @@ class NotificationService
      */
     public function sendBookingConfirmed(Booking $booking): void
     {
-        $client = $this->resolveClient($booking);
-        if (! $client) {
+        $recipient = $this->resolveRecipient($booking);
+        if (! $recipient) {
             return;
         }
 
-        $this->dispatchNotification($client, new BookingConfirmed($booking), $client->notification_channel ?? null);
+        $this->dispatchNotification($recipient, new BookingConfirmed($booking));
     }
 
     /**
@@ -31,12 +31,12 @@ class NotificationService
      */
     public function sendBookingReminder(Booking $booking): void
     {
-        $client = $this->resolveClient($booking);
-        if (! $client) {
+        $recipient = $this->resolveRecipient($booking);
+        if (! $recipient) {
             return;
         }
 
-        $this->dispatchNotification($client, new BookingReminder($booking), $client->notification_channel ?? null);
+        $this->dispatchNotification($recipient, new BookingReminder($booking));
     }
 
     /**
@@ -44,12 +44,12 @@ class NotificationService
      */
     public function sendBookingCancelled(Booking $booking, ?string $reason = null): void
     {
-        $client = $this->resolveClient($booking);
-        if (! $client) {
+        $recipient = $this->resolveRecipient($booking);
+        if (! $recipient) {
             return;
         }
 
-        $this->dispatchNotification($client, new BookingCancelled($booking, $reason), $client->notification_channel ?? null);
+        $this->dispatchNotification($recipient, new BookingCancelled($booking, $reason));
     }
 
     /**
@@ -57,41 +57,78 @@ class NotificationService
      */
     public function sendBookingRescheduled(Booking $booking, string $originalDate, string $originalTime): void
     {
-        $client = $this->resolveClient($booking);
-        if (! $client) {
+        $recipient = $this->resolveRecipient($booking);
+        if (! $recipient) {
             return;
         }
 
-        $this->dispatchNotification($client, new BookingRescheduled($booking, $originalDate, $originalTime), $client->notification_channel ?? null);
+        $this->dispatchNotification($recipient, new BookingRescheduled($booking, $originalDate, $originalTime));
     }
 
     /**
-     * Dispatch notification to user via their preferred channel(s).
-     *
-     * Channel routing is handled by each Notification class's via() method,
-     * which reads the user's notification_channel preference.
+     * Dispatch notification to a recipient via available preferred channel(s).
      */
-    protected function dispatchNotification(User $user, object $notification, ?string $channel = null): void
+    protected function dispatchNotification(object $recipient, object $notification): void
     {
-        if ($channel) {
-            $user->notify($notification, [$channel]);
-        } else {
-            $user->notify($notification);
+        $channels = $this->channelsFor($recipient);
+
+        if ($channels === []) {
+            return;
         }
+
+        $recipient->notifyNow($notification, $channels);
     }
 
     /**
-     * Resolve the client User model from booking.
+     * Resolve the notification recipient from booking.
      */
-    protected function resolveClient(Booking $booking): ?User
+    protected function resolveRecipient(Booking $booking): User|BookingRecipient|null
     {
-        // If booking has a client_id, load the User model
         if ($booking->client_id) {
             return $booking->client;
         }
 
-        // For guest bookings (no client_id), return null
-        // Guest bookings don't have a User model to notify
-        return null;
+        $recipient = BookingRecipient::fromBooking($booking);
+
+        return $this->channelsFor($recipient) === [] ? null : $recipient;
+    }
+
+    protected function channelsFor(object $recipient): array
+    {
+        $channel = $this->normalizeNotificationChannel($recipient->notification_channel ?? null);
+
+        if ($channel === null) {
+            return [];
+        }
+
+        $channels = match ($channel) {
+            'email' => ['mail'],
+            'sms' => [SmsChannel::class],
+            'both' => ['mail', SmsChannel::class],
+        };
+
+        if ($recipient instanceof BookingRecipient) {
+            return array_values(array_filter(
+                $channels,
+                fn (string $channel): bool => match ($channel) {
+                    'mail' => filled($recipient->routeNotificationForMail()),
+                    SmsChannel::class => filled($recipient->routeNotificationForSms()),
+                    default => true,
+                },
+            ));
+        }
+
+        return $channels;
+    }
+
+    private function normalizeNotificationChannel(?string $channel): ?string
+    {
+        if ($channel === null || trim($channel) === '') {
+            return 'email';
+        }
+
+        $normalized = strtolower(trim($channel));
+
+        return in_array($normalized, ['email', 'sms', 'both'], true) ? $normalized : null;
     }
 }

@@ -9,8 +9,11 @@ use App\Models\EmployeeSchedule;
 use App\Models\Service;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Notifications\BookingRecipient;
+use App\Notifications\BookingRescheduled;
 use App\Services\AvailabilityService;
 use App\Services\BookingService;
+use App\Services\NotificationService;
 use Carbon\Carbon;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -307,6 +310,63 @@ class BookingServiceTest extends TestCase
         $this->assertDatabaseMissing('booking_holds', ['id' => $hold->id]);
     }
 
+    public function test_confirm_booking_rejects_invalid_notification_channel(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+        $hold = $this->service->createHold(
+            tenantId: $tenant->id,
+            employeeId: $employee->id,
+            serviceId: $service->id,
+            date: '2026-07-10',
+            startTime: '10:00',
+            endTime: '11:00',
+        );
+
+        $this->expectException(HttpException::class);
+
+        try {
+            $this->service->confirmBooking(
+                holdId: $hold->id,
+                tenantId: $tenant->id,
+                clientName: 'John Doe',
+                clientEmail: 'john@example.com',
+                clientPhone: '+1 234 567 890',
+                notificationChannel: 'fax',
+            );
+        } finally {
+            $this->assertDatabaseHas('booking_holds', ['id' => $hold->id]);
+            $this->assertDatabaseMissing('bookings', [
+                'tenant_id' => $tenant->id,
+                'client_email' => 'john@example.com',
+                'notification_channel' => 'fax',
+            ]);
+        }
+    }
+
+    public function test_confirm_booking_normalizes_valid_notification_channel(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+        $hold = $this->service->createHold(
+            tenantId: $tenant->id,
+            employeeId: $employee->id,
+            serviceId: $service->id,
+            date: '2026-07-10',
+            startTime: '10:00',
+            endTime: '11:00',
+        );
+
+        $booking = $this->service->confirmBooking(
+            holdId: $hold->id,
+            tenantId: $tenant->id,
+            clientName: 'John Doe',
+            clientEmail: 'john@example.com',
+            clientPhone: '+1 234 567 890',
+            notificationChannel: ' SMS ',
+        );
+
+        $this->assertSame('sms', $booking->notification_channel);
+    }
+
     // ─── 6.3: confirmBooking rejects expired hold ─────────────────────────
 
     public function test_confirm_booking_rejects_expired_hold(): void
@@ -590,7 +650,7 @@ class BookingServiceTest extends TestCase
         });
 
         $this->assertInstanceOf(SendBookingNotification::class, $job);
-        $job->handle(app(\App\Services\NotificationService::class));
+        $job->handle(app(NotificationService::class));
 
         $booking->refresh();
 
@@ -604,7 +664,11 @@ class BookingServiceTest extends TestCase
         $this->assertNull($booking->cancelled_at);
         $this->assertNull($booking->cancellation_reason);
         Queue::assertNotPushed(QueuedCommand::class);
-        Notification::assertNothingSent();
+        Notification::assertSentTo(
+            BookingRecipient::fromBooking($booking),
+            BookingRescheduled::class,
+            fn ($notification, array $channels): bool => $channels === ['mail']
+        );
     }
 
     public function test_reschedule_booking_rejects_cancelled_and_completed_bookings(): void
