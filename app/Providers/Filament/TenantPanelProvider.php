@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Filament\Pages\Dashboard;
 use App\Filament\Resources\BookingResource;
+use App\Filament\Resources\EmployeeScheduleResource;
 use App\Filament\Resources\ServiceResource;
 use App\Filament\Resources\UserResource;
 use App\Models\Tenant;
@@ -37,6 +38,7 @@ class TenantPanelProvider extends PanelProvider
             ])
             ->resources([
                 BookingResource::class,
+                EmployeeScheduleResource::class,
                 UserResource::class,
                 ServiceResource::class,
             ])
