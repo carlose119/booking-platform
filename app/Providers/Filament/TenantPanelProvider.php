@@ -3,10 +3,9 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Pages\Dashboard;
-// use App\Filament\Resources\EmployeeScheduleResource;
 use App\Filament\Resources\BookingResource;
-// use App\Filament\Resources\UserResource;
 use App\Filament\Resources\ServiceResource;
+use App\Filament\Resources\UserResource;
 use App\Models\Tenant;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -38,9 +37,8 @@ class TenantPanelProvider extends PanelProvider
             ])
             ->resources([
                 BookingResource::class,
-                // UserResource::class,
+                UserResource::class,
                 ServiceResource::class,
-                // EmployeeScheduleResource::class,
             ])
             ->pages([
                 Dashboard::class,
