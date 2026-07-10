@@ -8,20 +8,28 @@ Define the core database schema and Eloquent models for the six foundational ent
 
 ### Requirement: Tenant Table
 
-The system SHALL persist tenant records with `id`, `name`, `slug`, `default_currency`, `created_at`, and `updated_at`. `default_currency` MUST default to `usd` and be validated as a supported lowercase ISO currency.
+The system SHALL persist tenant records with `id`, `name`, `slug`, `default_currency`, payment account mode, nullable Stripe connected account ID, Connect onboarding/status fields, `created_at`, and `updated_at`. `default_currency` MUST default to `usd`; payment account mode MUST default to direct API key mode for existing tenants.
 
 #### Scenario: Tenant migration runs
 
 - GIVEN the database is fresh
 - WHEN migrations are executed
-- THEN the `tenants` table includes `default_currency` with default `usd`
+- THEN the `tenants` table includes currency plus Connect payment account fields
 - AND `slug` has a unique index
 
 #### Scenario: Existing tenants are backfilled
 
-- GIVEN tenants exist before the currency migration
+- GIVEN tenants exist before the Connect migration
 - WHEN the migration/backfill runs
-- THEN each existing tenant resolves to `usd`
+- THEN each existing tenant resolves to direct API key mode and `usd` currency
+- AND connected account fields remain empty
+
+#### Scenario: Connected account is tenant-scoped
+
+- GIVEN tenant T1 has connected account acct_1 and tenant T2 has acct_2
+- WHEN T1 payment account data is queried
+- THEN only acct_1 is returned for T1
+- AND acct_2 is not visible through T1
 
 ### Requirement: User Table
 
@@ -78,7 +86,7 @@ The system SHALL persist employee schedule records with `id`, `employee_id` (FK 
 
 ### Requirement: Booking Table
 
-The system SHALL persist booking records with `id`, `tenant_id` (FK), `service_id` (FK), `employee_id` (FK, nullable), `client_id` (FK, nullable), `client_name`, `client_email`, `client_phone`, `date`, `start_time`, `end_time`, `status` (enum), `payment_status` (enum), `stripe_payment_intent_id`, `notification_channel`, `notes`, nullable cancellation audit fields `cancelled_at`, `cancellation_reason`, and `cancelled_by_user_id` (or equivalent actor FK), plus nullable reschedule audit fields for previous date/start/end, reschedule actor, and optional reason, plus nullable payment snapshot fields for charged amount and charged currency. A composite index on `(tenant_id, employee_id, date, status, start_time, end_time)` SHALL exist for availability query performance.
+The system SHALL persist booking records with `id`, `tenant_id` (FK), `service_id` (FK), `employee_id` (FK, nullable), `client_id` (FK, nullable), `client_name`, `client_email`, `client_phone`, `date`, `start_time`, `end_time`, `status` (enum), `payment_status` (enum), `stripe_payment_intent_id`, `notification_channel`, `notes`, nullable cancellation audit fields `cancelled_at`, `cancellation_reason`, and `cancelled_by_user_id` (or equivalent actor FK), plus nullable reschedule audit fields for previous date/start/end, reschedule actor, and optional reason, plus nullable payment snapshot fields for charged amount, charged currency, payment account mode, and connected account ID. A composite index on `(tenant_id, employee_id, date, status, start_time, end_time)` SHALL exist for availability query performance.
 
 (Previously: Booking table had status/payment fields and availability index, but no cancellation audit fields.)
 
@@ -99,14 +107,14 @@ The system SHALL persist booking records with `id`, `tenant_id` (FK), `service_i
 #### Scenario: Payment snapshot persists
 
 - GIVEN a booking requires payment
-- WHEN the payment amount is calculated
-- THEN charged amount and charged currency are stored on the booking
+- WHEN the payment amount and account context are resolved
+- THEN charged amount, charged currency, and payment account context are stored
 
 #### Scenario: Legacy booking snapshot fallback
 
-- GIVEN an existing booking has null charged currency
-- WHEN currency-aware reads occur
-- THEN currency resolves to `usd` without changing payment status
+- GIVEN an existing booking has null charged currency or account context
+- WHEN currency-aware or refund reads occur
+- THEN currency resolves to `usd` and account resolves from tenant direct mode
 
 #### Scenario: Cancellation audit fields persist
 

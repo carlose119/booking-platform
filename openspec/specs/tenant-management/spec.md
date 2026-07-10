@@ -8,22 +8,22 @@ Provide CRUD operations for tenant (business) records through the Super Admin pa
 
 ### Requirement: Tenant CRUD in Super Admin Panel
 
-The system SHALL provide a Filament resource in the Super Admin panel for creating, reading, updating, and deleting tenant records. The resource MUST include payment configuration fields, notification configuration fields, and a validated default currency field. If no currency is configured, the system MUST use `usd`.
+The system SHALL provide a Filament Super Admin resource for tenant CRUD. The resource MUST include payment policy, direct Stripe credentials, payment account mode, connected account ID, Connect onboarding/status fields, notification fields, and validated default currency. Direct credentials are required only when direct mode requires Stripe payment; Connect fields are required only for Connect mode readiness.
 
 (Previously: Tenant CRUD with only name and slug fields)
 
 #### Scenario: Create a new tenant
 
-- GIVEN a SuperAdmin is authenticated in the Super Admin panel
-- WHEN they submit valid tenant data without a currency
-- THEN a new Tenant record is persisted with default_currency=`usd`
-- AND the tenant appears in the tenant list
+- GIVEN a SuperAdmin submits valid tenant data without currency or Connect data
+- WHEN the tenant is created
+- THEN default_currency=`usd` and payment account mode defaults to direct
 
-#### Scenario: Update tenant currency
+#### Scenario: Update tenant payment account mode
 
-- GIVEN a SuperAdmin is authenticated in the Super Admin panel
-- WHEN they set tenant T1 default_currency to a supported lowercase ISO currency
-- THEN the updated currency is persisted for T1 only
+- GIVEN a SuperAdmin edits tenant T1
+- WHEN they select direct API keys or Stripe Connect mode
+- THEN the selected mode is persisted for T1 only
+- AND unrelated tenant payment settings are not modified
 
 #### Scenario: Reject unsupported currency
 
@@ -31,12 +31,11 @@ The system SHALL provide a Filament resource in the Super Admin panel for creati
 - WHEN they submit an unsupported currency code
 - THEN validation fails and existing tenant data is not modified
 
-#### Scenario: Update tenant payment settings
+#### Scenario: Read tenant Connect status
 
-- GIVEN a SuperAdmin is authenticated in the Super Admin panel
-- WHEN they modify a tenant's payment_policy from nopayment to 100upfront
-- THEN the updated payment_policy is persisted
-- AND Stripe API key fields are required when payment_policy is not nopayment
+- GIVEN tenant T1 has connected account and capability status values
+- WHEN SuperAdmin views T1
+- THEN payment mode, connected account ID, and onboarding/status fields are displayed
 
 #### Scenario: Update tenant notification settings
 
@@ -54,28 +53,30 @@ The system SHALL provide a Filament resource in the Super Admin panel for creati
 
 #### Scenario: Delete a tenant
 
-- GIVEN a SuperAdmin is authenticated in the Super Admin panel
+- GIVEN a SuperAdmin is authenticated
 - WHEN they delete a tenant record
-- THEN the tenant is removed from the database
-- AND associated users and resources are handled per cascade policy
+- THEN tenant data is removed per cascade policy
+- AND no Stripe account owned by another tenant is affected
 
 ### Requirement: Tenant Data Model
 
-The system SHALL store tenant records with `name`, `slug`, payment configuration, notification configuration, and `default_currency`. The currency MUST default to `usd`, MUST be tenant-scoped, and MUST NOT imply FX conversion or Stripe Connect behavior.
+The system SHALL store tenant records with `name`, `slug`, payment configuration, notification configuration, `default_currency`, payment account mode, nullable connected account ID, and Connect onboarding/status fields. Currency MUST remain tenant-scoped and MUST NOT imply FX conversion.
 
 (Previously: Tenant table with only name and slug fields)
 
-#### Scenario: Tenant has currency field
+#### Scenario: Connect fields have safe defaults
 
-- GIVEN migrations run successfully
-- WHEN a tenant record is inspected
-- THEN `default_currency` exists and defaults to `usd`
+- GIVEN a tenant is created without Connect configuration
+- WHEN the tenant record is inspected
+- THEN payment account mode defaults to direct
+- AND connected account/status fields are null or not onboarded
 
-#### Scenario: Existing tenants remain USD
+#### Scenario: Existing tenants remain direct mode
 
-- GIVEN existing tenant rows predate currency support
-- WHEN currency-aware reads occur
-- THEN missing or null currency is treated as `usd`
+- GIVEN tenants predate Connect support
+- WHEN payment account data is read
+- THEN they resolve to direct API key mode
+- AND existing Stripe API key behavior remains valid
 
 #### Scenario: Tenant slug uniqueness
 

@@ -10,6 +10,17 @@ Handle Stripe payment integration including PaymentIntent creation, webhook proc
 
 The system SHALL allow each tenant to configure their payment policy via Stripe payment settings. Settings MUST include: payment_policy (100upfront, fraction, nopayment), deposit_percentage (1-100, nullable), refund_window_hours (integer), stripe_api_key (encrypted), stripe_webhook_secret (encrypted).
 
+### Requirement: Payment Account Resolution
+
+The system MUST resolve each payment operation to direct API key mode or Stripe Connect mode. Direct mode MUST keep tenant credentials. Connect mode MUST use the platform key with tenant account context. The system MUST NOT create fees, perform FX conversion, or cross tenant boundaries.
+
+#### Scenario: Direct mode is preserved
+
+- GIVEN tenant T1 uses direct API key mode
+- WHEN a payment, refund, or webhook operation is processed
+- THEN tenant T1's Stripe API key and webhook secret are used
+- AND no connected account is required
+
 #### Scenario: Tenant configures 100% upfront payment
 
 - GIVEN a BusinessAdmin configures tenant T1 with payment_policy=100upfront
@@ -42,100 +53,93 @@ The system SHALL encrypt tenant Stripe API keys at rest using application-level 
 
 ### Requirement: PaymentIntent Creation
 
-The system SHALL create a Stripe PaymentIntent when a guest confirms a booking for tenants with payment_policy=100upfront or fraction. The PaymentIntent amount MUST match the required payment, currency MUST match the tenant default currency resolved at charge time, and booking payment snapshot fields MUST store the charged amount and currency. Existing or missing currency data MUST fall back to `usd`.
+The system SHALL create a Stripe PaymentIntent for paid bookings using the resolved account. Amount, currency, and snapshots MUST be preserved; `usd` fallback remains; unsupported currencies and inactive Connect capabilities MUST block creation.
 
-#### Scenario: Full payment PaymentIntent
+#### Scenario: Full payment
 
-- GIVEN tenant T1 has payment_policy=100upfront, default_currency=`eur`, and service costs 5000 minor units
+- GIVEN tenant T1 has payment_policy=100upfront and resolved payment account A1
 - WHEN a guest confirms booking
-- THEN PaymentIntent is created with amount=5000 and currency=`eur`
-- AND PaymentIntent ID, charged amount, and charged currency are stored on the booking
+- THEN PaymentIntent is created in A1 for the full amount
+- AND payment ID, charged amount, and charged currency are stored
 
-#### Scenario: Deposit payment PaymentIntent
+#### Scenario: Deposit payment
 
-- GIVEN tenant T1 has payment_policy=fraction, deposit_percentage=20, default_currency=`usd`, and service costs 5000 minor units
-- WHEN a guest confirms booking
-- THEN PaymentIntent is created with amount=1000 and currency=`usd`
-- AND deposit amount, total, charged amount, and charged currency are recorded on booking
+- GIVEN tenant T1 has fraction policy and deposit_percentage=20
+- WHEN a guest confirms a 5000 minor-unit booking
+- THEN PaymentIntent is created for 1000 minor units in T1's account
+- AND deposit and snapshot fields are recorded
 
-#### Scenario: Missing tenant currency falls back to USD
+#### Scenario: Currency is missing or unsupported
 
-- GIVEN tenant T1 has no configured currency
-- WHEN payment is required for a booking
-- THEN PaymentIntent currency is `usd`
-- AND booking charged currency is `usd`
+- GIVEN tenant T1 has missing or unsupported currency
+- WHEN payment is attempted
+- THEN missing currency uses `usd`, unsupported currency creates no PaymentIntent
+- AND no other tenant is touched
 
-#### Scenario: Unsupported Stripe currency is rejected
+#### Scenario: Connect not ready
 
-- GIVEN tenant T1 has an unsupported currency configured
+- GIVEN tenant T1 uses Connect without active charge capability
 - WHEN payment is attempted
 - THEN no PaymentIntent is created
-- AND the booking remains unpaid or pending without cross-tenant side effects
+- AND the booking remains unpaid or pending
 
 ### Requirement: Webhook Endpoint
 
-The system SHALL expose a POST webhook endpoint that verifies Stripe signature and processes payment_intent.succeeded and payment_intent.payment_failed events. Webhooks MUST be idempotent.
+The system SHALL verify signatures and process succeeded/failed PaymentIntent events for direct and Connect tenants. Events MUST resolve to one tenant/account context and remain idempotent.
 
-#### Scenario: Successful payment webhook
+#### Scenario: Successful payment
 
-- GIVEN a PaymentIntent succeeds in Stripe
-- WHEN webhook is received with valid signature
-- THEN booking payment_status is updated to paid
-- AND booking status is updated to confirmed
-- AND duplicate webhook is handled idempotently
+- GIVEN a direct or Connect PaymentIntent succeeds
+- WHEN a valid webhook is received
+- THEN the matching booking is marked paid or partial and confirmed
+- AND duplicate delivery is idempotent
 
-#### Scenario: Failed payment webhook
+#### Scenario: Failed payment
 
-- GIVEN a PaymentIntent fails in Stripe
-- WHEN webhook is received with valid signature
-- THEN booking payment_status remains unpaid
-- AND booking status remains pending
-- AND the held slot is released after TTL expires
+- GIVEN a direct or Connect PaymentIntent fails
+- WHEN a valid webhook is received
+- THEN payment remains unpaid and the pending slot may expire
 
-#### Scenario: Invalid webhook signature
+#### Scenario: Invalid or ambiguous
 
-- GIVEN a webhook request with invalid signature
-- WHEN the endpoint receives the request
+- GIVEN a webhook has an invalid signature or unresolved account
+- WHEN the endpoint receives it
 - THEN HTTP 400 is returned
 - AND no booking state is modified
 
 ### Requirement: Manual Refund
 
-The system SHALL allow BusinessAdmin to manually refund a paid booking via Stripe API. Refund MUST update booking payment_status to refunded.
+The system SHALL refund paid bookings through the original charge account context. Refunds MUST update payment_status to refunded and MUST NOT create cross-tenant refunds.
 
-#### Scenario: Admin refunds full payment
+#### Scenario: Admin refunds payment
 
-- GIVEN a booking with payment_status=paid and stripe_payment_intent_id exists
+- GIVEN a paid booking with Stripe PaymentIntent context exists
 - WHEN BusinessAdmin initiates refund
-- THEN Stripe refund is created
+- THEN Stripe refund is created in the original account
 - AND booking payment_status is updated to refunded
 
-#### Scenario: Admin refunds deposit payment
+#### Scenario: Admin refunds deposit
 
-- GIVEN a booking with payment_policy=fraction and deposit paid
+- GIVEN a fraction booking has deposit paid
 - WHEN BusinessAdmin initiates refund
-- THEN only the deposit amount is refunded
+- THEN only the deposit amount is refunded in the original account
 - AND booking payment_status is updated to refunded
 
 ### Requirement: Scheduled Auto-Refund
 
-The system SHALL run a scheduled command that checks bookings cancelled within the tenant's refund_window_hours. Eligible bookings MUST be automatically refunded via Stripe API, and business cancellations with `payment_status` paid or partial MUST use the existing asynchronous refund primitives. Refund processing MUST be idempotent.
+The system SHALL automatically refund eligible cancellations through the original payment account. Processing MUST remain asynchronous and idempotent for direct and Connect tenants.
 
-#### Scenario: Auto-refund within window
+#### Scenario: Eligible auto-refund
 
-- GIVEN a booking cancelled 12 hours before appointment
-- AND tenant refund_window_hours=24
+- GIVEN a paid booking is cancelled within tenant refund rules
 - WHEN the scheduled job runs
-- THEN the booking is eligible for auto-refund
-- AND Stripe refund is created automatically
+- THEN the refund is created in the original account
 
-#### Scenario: Auto-refund outside window
+#### Scenario: Ineligible auto-refund
 
-- GIVEN a booking cancelled 30 hours before appointment
-- AND tenant refund_window_hours=24
+- GIVEN cancellation is outside rules or already refunded
 - WHEN the scheduled job runs
-- THEN the booking is NOT eligible for auto-refund
-- AND no refund is processed
+- THEN no second refund is created
 
 #### Scenario: Business cancellation queues eligible refund
 
