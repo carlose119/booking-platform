@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Define email and SMS notification channel implementations, routing logic based on user preference, and queue processing for async delivery.
+Define email and SMS notification channel implementations, routing logic based on user and guest booking preference, and queue processing for async delivery.
 
 ## Requirements
 
 ### Requirement: Notification Channel Routing
 
-The system SHALL route notifications to the appropriate channel(s) based on the user's `notification_channel` preference (email, sms, or both).
+The system SHALL route notifications to channels from either a registered user's `notification_channel` or a guest booking's `notification_channel`. Guest recipients MUST use `client_email` for email and `client_phone` for SMS without requiring a user account. For `both`, the system MUST attempt every available guest contact method and MUST NOT suppress all delivery because one contact method is missing.
 
 #### Scenario: User prefers email only
 
@@ -30,6 +30,20 @@ The system SHALL route notifications to the appropriate channel(s) based on the 
 - WHEN a notification is triggered for that user
 - THEN the notification is sent via both email and SMS
 - AND both channels are attempted independently
+
+#### Scenario: Guest prefers both with one contact missing
+
+- GIVEN a guest booking with notification_channel="both" and only client_email present
+- WHEN a booking notification is triggered
+- THEN email delivery is attempted
+- AND SMS delivery is skipped without blocking the notification
+
+#### Scenario: Guest has no usable contact for selected channel
+
+- GIVEN a guest booking with notification_channel="sms" and no client_phone
+- WHEN a booking notification is triggered
+- THEN no notification is sent
+- AND the booking workflow still succeeds
 
 ### Requirement: Email Channel Implementation
 

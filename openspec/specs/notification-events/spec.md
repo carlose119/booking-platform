@@ -8,7 +8,7 @@ Define notification classes for booking confirmation, reminder, cancellation, an
 
 ### Requirement: Booking Confirmation Notification
 
-The system SHALL send a booking confirmation notification immediately after a successful booking is created.
+The system SHALL send booking confirmation to registered clients after successful no-payment booking creation, to guest no-payment bookings immediately after creation, and to paid guest bookings only after payment webhook success confirms the booking. Confirmation dispatch MUST be idempotent.
 
 #### Scenario: Booking confirmation sent via email
 
@@ -31,9 +31,27 @@ The system SHALL send a booking confirmation notification immediately after a su
 - THEN both email and SMS confirmations are sent within 30 seconds
 - AND both messages include booking details
 
+#### Scenario: Paid guest confirmation waits for webhook
+
+- GIVEN a payment-required guest booking is created pending payment
+- WHEN the pending booking is created before webhook payment success
+- THEN no confirmation notification is sent
+
+#### Scenario: Guest no-payment confirmation is sent after creation
+
+- GIVEN a no-payment guest booking is created confirmed
+- WHEN booking creation succeeds
+- THEN confirmation is sent to available guest contact channels
+
+#### Scenario: Duplicate webhook sends no duplicate confirmation
+
+- GIVEN a paid guest booking was already confirmed by a successful webhook
+- WHEN the same payment success is processed again
+- THEN no second confirmation notification is dispatched
+
 ### Requirement: Booking Reminder Notification
 
-The system SHALL send a booking reminder notification 24 hours before the scheduled appointment time.
+The system SHALL send a booking reminder notification 24 hours before appointment time to registered clients and guest recipients with usable contact details.
 
 #### Scenario: Reminder sent 24 hours before appointment
 
@@ -56,9 +74,22 @@ The system SHALL send a booking reminder notification 24 hours before the schedu
 - THEN no reminder is sent for that booking
 - AND the booking is skipped in the scheduler scan
 
+#### Scenario: Guest reminder uses booking contact fields
+
+- GIVEN a guest booking with client_email and notification_channel="email"
+- WHEN a reminder is triggered
+- THEN the reminder is sent to client_email
+
+#### Scenario: Guest reminder with missing selected contact
+
+- GIVEN a guest booking with notification_channel="sms" and no client_phone
+- WHEN a reminder is triggered
+- THEN no reminder notification is sent
+- AND the scheduler continues processing other bookings
+
 ### Requirement: Booking Cancellation Notification
 
-The system SHALL send a cancellation notification when a business cancels a booking. The notification MUST use the existing booking-cancelled path and include the cancellation reason when provided and refund information when applicable.
+The system SHALL send cancellation notifications to registered clients and guest recipients when a business cancels a booking. Missing guest contact details MUST NOT block cancellation, audit, or refund handling.
 
 #### Scenario: Cancellation notification sent to client
 
@@ -96,7 +127,7 @@ The system SHALL send a cancellation notification when a business cancels a book
 
 ### Requirement: Booking Reschedule Notification
 
-The system SHALL send a BookingRescheduled notification to the client when an authorized business user reschedules a booking. The notification MUST include original and new appointment date/time. Customer self-reschedule MUST NOT be introduced in this slice.
+The system SHALL send a BookingRescheduled notification to registered clients and guest recipients when an authorized business user reschedules a booking. Customer self-reschedule MUST NOT be introduced in this slice.
 
 #### Scenario: Reschedule notification sent to client
 
