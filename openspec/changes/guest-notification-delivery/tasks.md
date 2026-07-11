@@ -42,17 +42,26 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: RED Event and Webhook Tests
 
-- [ ] 3.1 In `tests/Unit/ProcessWebhookTest.php`, assert paid guest booking sends no confirmation before webhook, sends one after success, and duplicate success sends none.
-- [ ] 3.2 In `tests/Feature/NotificationDispatchTest.php`, add guest cancellation, cancellation-without-recipient success, guest reschedule, and no-recipient reschedule integrity scenarios.
-- [ ] 3.3 In `tests/Feature/SendRemindersTest.php`, add guest reminder to `client_email` and missing selected `client_phone` continues scheduler scenarios.
+- [x] 3.1 In `tests/Unit/ProcessWebhookTest.php`, assert paid guest booking sends no confirmation before webhook, sends one after success, and duplicate success sends none.
+- [x] 3.2 In `tests/Feature/NotificationDispatchTest.php`, add guest cancellation, cancellation-without-recipient success, guest reschedule, and no-recipient reschedule integrity scenarios.
+- [x] 3.3 In `tests/Feature/SendRemindersTest.php`, add guest reminder to `client_email` and missing selected `client_phone` continues scheduler scenarios.
 
 ## Phase 4: GREEN Event and Webhook Integration
 
-- [ ] 4.1 Modify `app/Jobs/ProcessWebhook.php` to dispatch `SendBookingNotification(..., 'confirmed')` only after unpaid guest booking transitions to paid/partial confirmed.
-- [ ] 4.2 Preserve duplicate webhook idempotency through the existing paid/partial early return in `app/Jobs/ProcessWebhook.php`.
-- [ ] 4.3 Verify `SendBookingNotification` paths still cover confirmation, reminder, cancellation, and reschedule through `NotificationService`.
+- [x] 4.1 Modify `app/Jobs/ProcessWebhook.php` to dispatch `SendBookingNotification(..., 'confirmed')` only after unpaid guest booking transitions to paid/partial confirmed.
+- [x] 4.2 Preserve duplicate webhook idempotency through the existing paid/partial early return in `app/Jobs/ProcessWebhook.php`.
+- [x] 4.3 Verify `SendBookingNotification` paths still cover confirmation, reminder, cancellation, and reschedule through `NotificationService`.
 
 ## Phase 5: Verification and Refactor
 
-- [ ] 5.1 Run `php artisan test tests/Unit/NotificationServiceTest.php tests/Unit/ProcessWebhookTest.php tests/Feature/NotificationDispatchTest.php tests/Feature/SendRemindersTest.php`.
-- [ ] 5.2 Run `php artisan test` and `./vendor/bin/pint --dirty`; refactor only duplication introduced in touched notification routing code.
+- [x] 5.1 Run `php artisan test tests/Unit/NotificationServiceTest.php tests/Unit/ProcessWebhookTest.php tests/Feature/NotificationDispatchTest.php tests/Feature/SendRemindersTest.php`.
+- [x] 5.2 Run `php artisan test` and `./vendor/bin/pint --dirty`; refactor only duplication introduced in touched notification routing code.
+
+## Surgical Remediation: Slice 2 Blockers
+
+- [x] R3 Make guest payment success transition plus confirmation enqueue retry-safe when queue dispatch fails.
+- [x] R4 Make duplicate webhook idempotency atomic enough through a conditional payment-status transition guard.
+- [x] R5 Cover already `partial` guest booking duplicate webhook behavior without duplicate confirmation dispatch.
+- [x] R6 Add exhausted `SendBookingNotification` failure logging with safe booking/tenant/event/channel/exception context.
+- [x] R7 Remove raw exception messages from exhausted notification failure logs and prove provider PII/secrets are not logged.
+- [x] R8 Replace raw `ProcessWebhook` Stripe event retrieval exception logging with safe structured context and prove email/phone/secret-like exception text is not logged.

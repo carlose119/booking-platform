@@ -11,6 +11,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class ProcessWebhook implements ShouldQueue
@@ -55,7 +56,14 @@ class ProcessWebhook implements ShouldQueue
         try {
             $event = $stripeService->retrieveEvent($this->eventId, $accountContext->stripeOptions());
         } catch (\Exception $e) {
-            Log::error("Failed to retrieve Stripe event {$this->eventId}: {$e->getMessage()}");
+            Log::error('Failed to retrieve Stripe event', [
+                'event_id' => $this->eventId,
+                'tenant_id' => $this->tenantId,
+                'has_connected_account' => filled($accountContext->connectedAccountId),
+                'connected_account_id' => $accountContext->connectedAccountId,
+                'exception_class' => class_basename($e),
+                'failure_code' => 'stripe_event_retrieval_failed',
+            ]);
 
             throw $e;
         }
@@ -85,10 +93,26 @@ class ProcessWebhook implements ShouldQueue
         $tenant = Tenant::findOrFail($booking->tenant_id);
         $paymentStatus = $tenant->payment_policy === 'fraction' ? 'partial' : 'paid';
 
-        $booking->update([
-            'payment_status' => $paymentStatus,
-            'status' => 'confirmed',
-        ]);
+        DB::transaction(function () use ($booking, $paymentStatus): void {
+            if (! $this->confirmPendingBookingPayment($booking, $paymentStatus)) {
+                return;
+            }
+
+            if ($booking->refresh()->client_id === null) {
+                SendBookingNotification::dispatch($booking, 'confirmed');
+            }
+        });
+    }
+
+    private function confirmPendingBookingPayment(Booking $booking, string $paymentStatus): bool
+    {
+        return Booking::query()
+            ->whereKey($booking->id)
+            ->whereNotIn('payment_status', ['paid', 'partial'])
+            ->update([
+                'payment_status' => $paymentStatus,
+                'status' => 'confirmed',
+            ]) === 1;
     }
 
     private function handlePaymentFailed(object $paymentIntent): void

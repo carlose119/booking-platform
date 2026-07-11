@@ -9,6 +9,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class SendBookingNotification implements ShouldQueue
 {
@@ -51,5 +53,20 @@ class SendBookingNotification implements ShouldQueue
             ),
             default => null,
         };
+    }
+
+    /**
+     * Handle an exhausted notification delivery failure.
+     */
+    public function failed(Throwable $exception): void
+    {
+        Log::error('Booking notification delivery exhausted retries', [
+            'booking_id' => $this->booking->id,
+            'tenant_id' => $this->booking->tenant_id,
+            'event' => $this->event,
+            'notification_channel' => $this->booking->notification_channel,
+            'exception_class' => class_basename($exception),
+            'failure_code' => 'notification_delivery_exhausted',
+        ]);
     }
 }

@@ -5,14 +5,18 @@ namespace Tests\Feature;
 use App\Enums\UserRole;
 use App\Jobs\SendBookingNotification;
 use App\Models\Booking;
+use App\Models\EmployeeSchedule;
 use App\Models\Service;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Notifications\BookingCancelled;
 use App\Notifications\BookingRecipient;
+use App\Notifications\BookingRescheduled;
 use App\Services\BookingService;
 use App\Services\NotificationService;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
@@ -267,6 +271,52 @@ class NotificationDispatchTest extends TestCase
         );
     }
 
+    public function test_business_cancellation_without_usable_guest_recipient_still_records_audit(): void
+    {
+        Queue::fake();
+        Notification::fake();
+
+        $admin = User::create([
+            'tenant_id' => $this->tenant->id,
+            'name' => 'Business Admin',
+            'email' => 'no-recipient-admin@example.com',
+            'password' => 'password',
+            'role' => UserRole::BusinessAdmin,
+        ]);
+
+        $booking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'client_id' => null,
+            'client_name' => 'Guest Client',
+            'client_email' => '',
+            'client_phone' => '',
+            'notification_channel' => 'sms',
+            'date' => now()->addDay(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'status' => 'confirmed',
+            'payment_status' => 'unpaid',
+        ]);
+
+        $cancelled = app(BookingService::class)->cancelBooking(
+            bookingId: $booking->id,
+            tenantId: $this->tenant->id,
+            actorUserId: $admin->id,
+            reason: 'Staff unavailable',
+        );
+
+        Queue::assertPushed(SendBookingNotification::class, 1);
+
+        (new SendBookingNotification($cancelled, 'cancelled', 'Staff unavailable'))
+            ->handle(app(NotificationService::class));
+
+        $this->assertEquals('cancelled', $cancelled->status);
+        $this->assertEquals('Staff unavailable', $cancelled->cancellation_reason);
+        $this->assertEquals($admin->id, $cancelled->cancelled_by_user_id);
+        Notification::assertNothingSent();
+    }
+
     public function test_cancelled_notification_includes_refund_info_for_partial_payment(): void
     {
         $booking = Booking::create([
@@ -321,6 +371,150 @@ class NotificationDispatchTest extends TestCase
         });
     }
 
+    public function test_business_reschedule_sends_guest_notification_to_booking_email(): void
+    {
+        Queue::fake();
+        Notification::fake();
+        $futureMonday = Carbon::now()->addWeek()->startOfWeek();
+        $admin = User::create([
+            'tenant_id' => $this->tenant->id,
+            'name' => 'Business Admin',
+            'email' => 'reschedule-admin@example.com',
+            'password' => 'password',
+            'role' => UserRole::BusinessAdmin,
+        ]);
+        $employee = User::create([
+            'tenant_id' => $this->tenant->id,
+            'name' => 'Jane Doe',
+            'email' => 'employee@example.com',
+            'password' => 'password',
+            'role' => UserRole::Employee,
+        ]);
+        $this->service->employees()->attach($employee->id);
+        EmployeeSchedule::create([
+            'employee_id' => $employee->id,
+            'day_of_week' => $futureMonday->dayOfWeekIso,
+            'start_time' => '09:00',
+            'end_time' => '12:00',
+        ]);
+        $booking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'employee_id' => $employee->id,
+            'client_id' => null,
+            'client_name' => 'Guest Client',
+            'client_email' => 'guest@example.com',
+            'client_phone' => '+15557654321',
+            'notification_channel' => 'email',
+            'date' => $futureMonday->toDateString(),
+            'start_time' => '09:00',
+            'end_time' => '10:00',
+            'status' => 'confirmed',
+        ]);
+
+        app(BookingService::class)->rescheduleBooking(
+            bookingId: $booking->id,
+            tenantId: $this->tenant->id,
+            actorUserId: $admin->id,
+            date: $futureMonday->toDateString(),
+            startTime: '10:00',
+            endTime: '11:00',
+            reason: 'Move guest booking',
+        );
+
+        $job = null;
+        Queue::assertPushed(SendBookingNotification::class, function (SendBookingNotification $queuedJob) use (&$job, $booking): bool {
+            $job = $queuedJob;
+
+            return $queuedJob->booking->id === $booking->id
+                && $queuedJob->event === 'rescheduled'
+                && $queuedJob->originalDate === $booking->date->toDateString()
+                && $queuedJob->originalTime === '09:00 - 10:00';
+        });
+
+        $this->assertInstanceOf(SendBookingNotification::class, $job);
+        $job->handle(app(NotificationService::class));
+
+        $booking->refresh();
+        $this->assertEquals('10:00', $booking->start_time->format('H:i'));
+        $this->assertEquals('11:00', $booking->end_time->format('H:i'));
+        Notification::assertSentTo(
+            BookingRecipient::fromBooking($booking),
+            BookingRescheduled::class,
+            fn ($notification, array $channels): bool => $channels === ['mail']
+        );
+    }
+
+    public function test_business_reschedule_without_usable_guest_recipient_preserves_booking_changes(): void
+    {
+        Queue::fake();
+        Notification::fake();
+        $futureMonday = Carbon::now()->addWeek()->startOfWeek();
+        $admin = User::create([
+            'tenant_id' => $this->tenant->id,
+            'name' => 'Business Admin',
+            'email' => 'reschedule-empty-admin@example.com',
+            'password' => 'password',
+            'role' => UserRole::BusinessAdmin,
+        ]);
+        $employee = User::create([
+            'tenant_id' => $this->tenant->id,
+            'name' => 'Jane Doe',
+            'email' => 'employee-empty@example.com',
+            'password' => 'password',
+            'role' => UserRole::Employee,
+        ]);
+        $this->service->employees()->attach($employee->id);
+        EmployeeSchedule::create([
+            'employee_id' => $employee->id,
+            'day_of_week' => $futureMonday->dayOfWeekIso,
+            'start_time' => '09:00',
+            'end_time' => '12:00',
+        ]);
+        $booking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'employee_id' => $employee->id,
+            'client_id' => null,
+            'client_name' => 'Guest Client',
+            'client_email' => '',
+            'client_phone' => '',
+            'notification_channel' => 'sms',
+            'date' => $futureMonday->toDateString(),
+            'start_time' => '09:00',
+            'end_time' => '10:00',
+            'status' => 'confirmed',
+        ]);
+
+        app(BookingService::class)->rescheduleBooking(
+            bookingId: $booking->id,
+            tenantId: $this->tenant->id,
+            actorUserId: $admin->id,
+            date: $futureMonday->toDateString(),
+            startTime: '10:00',
+            endTime: '11:00',
+            reason: 'Move guest booking',
+        );
+
+        $job = null;
+        Queue::assertPushed(SendBookingNotification::class, function (SendBookingNotification $queuedJob) use (&$job, $booking): bool {
+            $job = $queuedJob;
+
+            return $queuedJob->booking->id === $booking->id
+                && $queuedJob->event === 'rescheduled';
+        });
+
+        $this->assertInstanceOf(SendBookingNotification::class, $job);
+        $job->handle(app(NotificationService::class));
+
+        $booking->refresh();
+        $this->assertEquals('10:00', $booking->start_time->format('H:i'));
+        $this->assertEquals('11:00', $booking->end_time->format('H:i'));
+        $this->assertEquals($admin->id, $booking->rescheduled_by);
+        $this->assertEquals('Move guest booking', $booking->reschedule_reason);
+        Notification::assertNothingSent();
+    }
+
     // ─── Job execution tests ────────────────────────────────────────────
 
     public function test_job_executes_notification_service(): void
@@ -368,5 +562,90 @@ class NotificationDispatchTest extends TestCase
 
         $this->assertEquals(3, $job->tries);
         $this->assertEquals([30, 120, 300], $job->backoff);
+    }
+
+    public function test_failed_job_logs_safe_context_when_notification_delivery_is_exhausted(): void
+    {
+        $booking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'client_id' => null,
+            'client_name' => 'Guest Client',
+            'client_email' => 'guest@example.com',
+            'client_phone' => '+15551234567',
+            'notification_channel' => 'email',
+            'date' => now()->addDay(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'status' => 'confirmed',
+        ]);
+
+        $rawProviderMessage = 'SMTP rejected recipient guest@example.com with phone +15551234567';
+
+        Log::shouldReceive('error')
+            ->once()
+            ->with('Booking notification delivery exhausted retries', Mockery::on(function (array $context) use ($booking, $rawProviderMessage): bool {
+                $this->assertSame($booking->id, $context['booking_id']);
+                $this->assertSame($this->tenant->id, $context['tenant_id']);
+                $this->assertSame('confirmed', $context['event']);
+                $this->assertSame('email', $context['notification_channel']);
+                $this->assertSame('RuntimeException', $context['exception_class']);
+                $this->assertSame('notification_delivery_exhausted', $context['failure_code']);
+                $this->assertArrayNotHasKey('exception_message', $context);
+                $this->assertArrayNotHasKey('client_email', $context);
+                $this->assertArrayNotHasKey('client_phone', $context);
+                $encodedContext = json_encode($context, JSON_THROW_ON_ERROR);
+                $this->assertStringNotContainsString($rawProviderMessage, $encodedContext);
+                $this->assertStringNotContainsString('guest@example.com', $encodedContext);
+                $this->assertStringNotContainsString('+15551234567', $encodedContext);
+
+                return true;
+            }));
+
+        (new SendBookingNotification($booking, 'confirmed'))
+            ->failed(new \RuntimeException($rawProviderMessage));
+    }
+
+    public function test_failed_job_logs_safe_context_for_non_confirmation_events(): void
+    {
+        $booking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'client_id' => null,
+            'client_name' => 'Guest Client',
+            'client_email' => 'guest@example.com',
+            'client_phone' => '+15551234567',
+            'notification_channel' => 'sms',
+            'date' => now()->addDay(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'status' => 'cancelled',
+        ]);
+
+        $rawProviderMessage = 'SMS provider exhausted for +15551234567 / guest@example.com token=secret-value';
+
+        Log::shouldReceive('error')
+            ->once()
+            ->with('Booking notification delivery exhausted retries', Mockery::on(function (array $context) use ($booking, $rawProviderMessage): bool {
+                $this->assertSame($booking->id, $context['booking_id']);
+                $this->assertSame($this->tenant->id, $context['tenant_id']);
+                $this->assertSame('cancelled', $context['event']);
+                $this->assertSame('sms', $context['notification_channel']);
+                $this->assertSame('LogicException', $context['exception_class']);
+                $this->assertSame('notification_delivery_exhausted', $context['failure_code']);
+                $this->assertArrayNotHasKey('exception_message', $context);
+                $this->assertArrayNotHasKey('client_email', $context);
+                $this->assertArrayNotHasKey('client_phone', $context);
+                $encodedContext = json_encode($context, JSON_THROW_ON_ERROR);
+                $this->assertStringNotContainsString($rawProviderMessage, $encodedContext);
+                $this->assertStringNotContainsString('guest@example.com', $encodedContext);
+                $this->assertStringNotContainsString('+15551234567', $encodedContext);
+                $this->assertStringNotContainsString('secret-value', $encodedContext);
+
+                return true;
+            }));
+
+        (new SendBookingNotification($booking, 'cancelled', 'Staff unavailable'))
+            ->failed(new \LogicException($rawProviderMessage));
     }
 }

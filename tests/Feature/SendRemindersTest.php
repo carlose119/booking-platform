@@ -6,9 +6,13 @@ use App\Jobs\SendBookingNotification;
 use App\Models\Booking;
 use App\Models\Service;
 use App\Models\Tenant;
-use Carbon\Carbon;
+use App\Notifications\BookingRecipient;
+use App\Notifications\BookingReminder;
+use App\Services\NotificationService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class SendRemindersTest extends TestCase
@@ -16,6 +20,7 @@ class SendRemindersTest extends TestCase
     use RefreshDatabase;
 
     protected Tenant $tenant;
+
     protected Service $service;
 
     protected function setUp(): void
@@ -152,5 +157,55 @@ class SendRemindersTest extends TestCase
         $booking2->refresh();
         $this->assertNotNull($booking1->reminded_at);
         $this->assertNotNull($booking2->reminded_at);
+    }
+
+    public function test_guest_reminder_with_missing_selected_phone_continues_scheduler(): void
+    {
+        Queue::fake();
+        Notification::fake();
+        $missingPhoneBooking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'client_id' => null,
+            'client_name' => 'SMS Guest',
+            'client_email' => 'sms-guest@example.com',
+            'client_phone' => '',
+            'notification_channel' => 'sms',
+            'date' => now()->addDay()->toDateString(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'status' => 'confirmed',
+        ]);
+        $emailBooking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'client_id' => null,
+            'client_name' => 'Email Guest',
+            'client_email' => 'email-guest@example.com',
+            'client_phone' => '',
+            'notification_channel' => 'email',
+            'date' => now()->addDay()->toDateString(),
+            'start_time' => '12:00',
+            'end_time' => '13:00',
+            'status' => 'confirmed',
+        ]);
+
+        Artisan::call('booking:send-reminders');
+
+        $missingPhoneBooking->refresh();
+        $emailBooking->refresh();
+        $this->assertNotNull($missingPhoneBooking->reminded_at);
+        $this->assertNotNull($emailBooking->reminded_at);
+        Queue::assertPushed(SendBookingNotification::class, 2);
+
+        (new SendBookingNotification($missingPhoneBooking, 'reminder'))->handle(app(NotificationService::class));
+        Notification::assertNothingSent();
+
+        (new SendBookingNotification($emailBooking, 'reminder'))->handle(app(NotificationService::class));
+        Notification::assertSentTo(
+            BookingRecipient::fromBooking($emailBooking),
+            BookingReminder::class,
+            fn ($notification, array $channels): bool => $channels === ['mail']
+        );
     }
 }
