@@ -65,3 +65,7 @@ Chain strategy: stacked-to-main
 - [x] R6 Add exhausted `SendBookingNotification` failure logging with safe booking/tenant/event/channel/exception context.
 - [x] R7 Remove raw exception messages from exhausted notification failure logs and prove provider PII/secrets are not logged.
 - [x] R8 Replace raw `ProcessWebhook` Stripe event retrieval exception logging with safe structured context and prove email/phone/secret-like exception text is not logged.
+
+## Final Verification Remediation
+
+- [x] R9 Add paid and unpaid cancellation refund copy for guest email/SMS notifications using payment snapshots and existing currency formatting.

@@ -317,7 +317,65 @@ class NotificationDispatchTest extends TestCase
         Notification::assertNothingSent();
     }
 
-    public function test_cancelled_notification_includes_refund_info_for_partial_payment(): void
+    public function test_cancelled_notification_includes_snapshot_refund_amount_and_processing_time_for_paid_guest(): void
+    {
+        $booking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'client_id' => null,
+            'client_name' => 'Guest Client',
+            'client_email' => 'guest@example.com',
+            'client_phone' => '+15557654321',
+            'notification_channel' => 'both',
+            'date' => now()->addDay(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'status' => 'cancelled',
+            'payment_status' => 'partial',
+            'payment_amount_cents' => 1250,
+            'payment_currency' => 'usd',
+        ]);
+
+        $notification = new BookingCancelled($booking, 'Staff unavailable');
+        $guest = BookingRecipient::fromBooking($booking);
+
+        $mail = $notification->toMail($guest);
+        $sms = $notification->toSms($guest);
+
+        $this->assertContains('Reason: Staff unavailable', $mail->introLines);
+        $this->assertContains('A refund of $12.50 will be processed to your original payment method within 5-10 business days.', $mail->introLines);
+        $this->assertStringContainsString('Reason: Staff unavailable', $sms->body);
+        $this->assertStringContainsString('Refund of $12.50 will be processed within 5-10 business days.', $sms->body);
+    }
+
+    public function test_cancelled_notification_explains_no_refund_for_unpaid_guest(): void
+    {
+        $booking = Booking::create([
+            'tenant_id' => $this->tenant->id,
+            'service_id' => $this->service->id,
+            'client_id' => null,
+            'client_name' => 'Guest Client',
+            'client_email' => 'guest@example.com',
+            'client_phone' => '+15557654321',
+            'notification_channel' => 'both',
+            'date' => now()->addDay(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'status' => 'cancelled',
+            'payment_status' => 'unpaid',
+        ]);
+
+        $notification = new BookingCancelled($booking, 'Staff unavailable');
+        $guest = BookingRecipient::fromBooking($booking);
+
+        $mail = $notification->toMail($guest);
+        $sms = $notification->toSms($guest);
+
+        $this->assertContains('No refund will be issued because no payment was received for this booking.', $mail->introLines);
+        $this->assertStringContainsString('No refund will be issued because no payment was received.', $sms->body);
+    }
+
+    public function test_cancelled_notification_does_not_invent_a_refund_amount_when_paid_booking_has_no_snapshot(): void
     {
         $booking = Booking::create([
             'tenant_id' => $this->tenant->id,
@@ -330,7 +388,7 @@ class NotificationDispatchTest extends TestCase
             'start_time' => '10:00',
             'end_time' => '11:00',
             'status' => 'cancelled',
-            'payment_status' => 'partial',
+            'payment_status' => 'paid',
         ]);
 
         $notification = new BookingCancelled($booking, 'Staff unavailable');
@@ -338,9 +396,7 @@ class NotificationDispatchTest extends TestCase
         $mail = $notification->toMail($this->client);
         $sms = $notification->toSms($this->client);
 
-        $this->assertContains('Reason: Staff unavailable', $mail->introLines);
         $this->assertContains('A refund will be processed to your original payment method.', $mail->introLines);
-        $this->assertStringContainsString('Reason: Staff unavailable', $sms->body);
         $this->assertStringContainsString('Refund will be processed.', $sms->body);
     }
 

@@ -5,6 +5,7 @@ namespace App\Notifications;
 use App\Channels\SmsChannel;
 use App\Models\Booking;
 use App\Notifications\Messages\SmsMessage;
+use App\Support\Currency;
 use Illuminate\Bus\Queueable;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
@@ -62,8 +63,10 @@ class BookingCancelled extends Notification
             $message->line("Reason: {$this->reason}");
         }
 
-        if (in_array($this->booking->payment_status, ['paid', 'partial'], true)) {
-            $message->line('A refund will be processed to your original payment method.');
+        if ($this->isRefundEligible()) {
+            $message->line($this->refundMailLine());
+        } elseif ($this->booking->payment_status === 'unpaid') {
+            $message->line('No refund will be issued because no payment was received for this booking.');
         }
 
         return $message->line('If you have any questions, please contact the business directly.');
@@ -83,10 +86,47 @@ class BookingCancelled extends Notification
             $body .= ". Reason: {$this->reason}";
         }
 
-        if (in_array($this->booking->payment_status, ['paid', 'partial'], true)) {
-            $body .= '. Refund will be processed.';
+        if ($this->isRefundEligible()) {
+            $body .= '. '.$this->refundSmsLine();
+        } elseif ($this->booking->payment_status === 'unpaid') {
+            $body .= '. No refund will be issued because no payment was received.';
         }
 
         return (new SmsMessage)->body($body);
+    }
+
+    private function isRefundEligible(): bool
+    {
+        return in_array($this->booking->payment_status, ['paid', 'partial'], true);
+    }
+
+    private function refundMailLine(): string
+    {
+        $amount = $this->refundAmount();
+
+        return $amount === null
+            ? 'A refund will be processed to your original payment method.'
+            : "A refund of {$amount} will be processed to your original payment method within 5-10 business days.";
+    }
+
+    private function refundSmsLine(): string
+    {
+        $amount = $this->refundAmount();
+
+        return $amount === null
+            ? 'Refund will be processed.'
+            : "Refund of {$amount} will be processed within 5-10 business days.";
+    }
+
+    private function refundAmount(): ?string
+    {
+        if ($this->booking->payment_amount_cents === null) {
+            return null;
+        }
+
+        return Currency::format(
+            $this->booking->payment_amount_cents,
+            $this->booking->payment_currency,
+        );
     }
 }

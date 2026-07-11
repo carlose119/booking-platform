@@ -45,6 +45,40 @@
 - Full suite: `php artisan test` → 232 passed, 830 assertions.
 - Style: `vendor/bin/pint --dirty --test` → PASS, 10 files.
 - Whitespace: `git diff --check` → PASS.
+
+## Final Verification Remediation — Cancellation Refund Copy
+
+**Status**: Complete
+**Mode**: Strict TDD
+**Delivery**: Surgical stacked-to-main remediation
+**Work unit boundary**: `BookingCancelled` email/SMS cancellation copy and its feature coverage only.
+**Review budget impact**: Two production copy helpers and three focused tests; well below the 400-line guideline.
+
+### Completed Tasks
+
+- [x] R9 Add paid and unpaid cancellation refund copy for guest email/SMS notifications using payment snapshots and existing currency formatting.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| R9 | `tests/Feature/NotificationDispatchTest.php` | Feature notification rendering | ✅ `php artisan test tests/Feature/NotificationDispatchTest.php` → 15 passed, 64 assertions | ✅ Paid guest email/SMS snapshot amount + 5-10 business-day copy and unpaid guest no-refund copy: `--filter=cancelled_notification` → 2 failed, 2 passed, 7 assertions | ✅ `--filter=cancelled_notification` → 5 passed, 12 assertions | ✅ Paid guest with `both` channels, unpaid guest with `both` channels, and a registered paid booking without a snapshot that retains generic non-invented copy | ✅ Extracted refund eligibility, snapshot formatting, and channel-specific copy helpers; focused tests remained green |
+
+### Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | `php artisan test tests/Feature/NotificationDispatchTest.php --filter=cancelled_notification` → 5 passed, 12 assertions |
+| Runtime harness command/scenario and exact result | `php artisan test tests/Unit/NotificationServiceTest.php tests/Feature/NotificationDispatchTest.php tests/Feature/SendRemindersTest.php tests/Unit/ProcessWebhookTest.php tests/Feature/BookingWithPaymentTest.php tests/Feature/WebhookControllerTest.php` → 70 passed, 202 assertions; direct job/service notification rendering covers guest and registered recipients through both mail and SMS representations |
+| Rollback boundary | Revert `app/Notifications/BookingCancelled.php` refund-copy helpers and the three cancellation-copy tests in `tests/Feature/NotificationDispatchTest.php`; routing, refund initiation, and unrelated notification behavior remain unchanged |
+
+### Verification
+
+- Safety baseline: `php artisan test tests/Feature/NotificationDispatchTest.php` → 15 passed, 64 assertions.
+- RED: `php artisan test tests/Feature/NotificationDispatchTest.php --filter=cancelled_notification` → 2 failed, 2 passed, 7 assertions; paid copy lacked snapshot amount/time and unpaid copy lacked an explicit no-refund explanation.
+- GREEN/triangulation: `php artisan test tests/Feature/NotificationDispatchTest.php --filter=cancelled_notification` → 5 passed, 12 assertions.
+- Relevant notification suite: `php artisan test tests/Unit/NotificationServiceTest.php tests/Feature/NotificationDispatchTest.php tests/Feature/SendRemindersTest.php tests/Unit/ProcessWebhookTest.php tests/Feature/BookingWithPaymentTest.php tests/Feature/WebhookControllerTest.php` → 70 passed, 202 assertions.
+- Full suite: `composer test` → 253 passed, 921 assertions.
 - Remediation RED: `php artisan test tests/Unit/NotificationServiceTest.php tests/Unit/SmsChannelTest.php tests/Unit/BookingServiceTest.php` → 5 failed, 40 passed; invalid channels still fell back to mail, valid channel was not normalized, and generic SMS route was not covered.
 - Remediation GREEN: `php artisan test tests/Unit/NotificationServiceTest.php tests/Unit/SmsChannelTest.php tests/Unit/BookingServiceTest.php` → 45 passed, 132 assertions.
 - Remediation focused suite: `php artisan test tests/Unit/NotificationServiceTest.php tests/Unit/SmsChannelTest.php tests/Unit/BookingConfirmationTest.php tests/Unit/BookingServiceTest.php tests/Feature/NotificationDispatchTest.php tests/Feature/SendRemindersTest.php` → 63 passed, 163 assertions.
