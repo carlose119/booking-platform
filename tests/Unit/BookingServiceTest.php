@@ -504,6 +504,175 @@ class BookingServiceTest extends TestCase
         );
     }
 
+    public function test_create_hold_releases_expired_conflicting_hold_without_cleanup(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+
+        $expiredHold = BookingHold::create([
+            'tenant_id' => $tenant->id,
+            'employee_id' => $employee->id,
+            'service_id' => $service->id,
+            'date' => '2026-07-10',
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'session_id' => 'expired-conflict',
+            'expires_at' => Carbon::now()->subMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+
+        $newHold = $this->service->createHold(
+            tenantId: $tenant->id,
+            employeeId: $employee->id,
+            serviceId: $service->id,
+            date: '2026-07-10',
+            startTime: '10:00',
+            endTime: '11:00',
+        );
+
+        $this->assertNotEquals($expiredHold->id, $newHold->id);
+        $this->assertNull($expiredHold->refresh()->active_slot_key);
+        $this->assertSame(BookingHold::ACTIVE_SLOT_KEY, $newHold->refresh()->active_slot_key);
+        $this->assertDatabaseHas('booking_holds', [
+            'id' => $expiredHold->id,
+            'active_slot_key' => null,
+        ]);
+    }
+
+    public function test_create_hold_keeps_active_conflict_rejected(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+
+        $activeHold = BookingHold::create([
+            'tenant_id' => $tenant->id,
+            'employee_id' => $employee->id,
+            'service_id' => $service->id,
+            'date' => '2026-07-10',
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'session_id' => 'active-conflict',
+            'expires_at' => Carbon::now()->addMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+
+        $this->expectException(QueryException::class);
+
+        try {
+            $this->service->createHold(
+                tenantId: $tenant->id,
+                employeeId: $employee->id,
+                serviceId: $service->id,
+                date: '2026-07-10',
+                startTime: '10:00',
+                endTime: '11:00',
+            );
+        } finally {
+            $this->assertSame(BookingHold::ACTIVE_SLOT_KEY, $activeHold->refresh()->active_slot_key);
+            $this->assertDatabaseCount('booking_holds', 1);
+        }
+    }
+
+    public function test_confirm_booking_rejects_expired_hold_and_clears_active_slot_key(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+
+        $hold = BookingHold::create([
+            'tenant_id' => $tenant->id,
+            'employee_id' => $employee->id,
+            'service_id' => $service->id,
+            'date' => '2026-07-10',
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'session_id' => 'expired-confirmation',
+            'expires_at' => Carbon::now()->subMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+
+        $this->expectException(HttpException::class);
+
+        try {
+            $this->service->confirmBooking(
+                holdId: $hold->id,
+                tenantId: $tenant->id,
+                clientName: 'John Doe',
+                clientEmail: 'john@example.com',
+                clientPhone: '+1 234 567 890',
+            );
+        } finally {
+            $this->assertDatabaseMissing('booking_holds', ['id' => $hold->id]);
+
+            $newHold = $this->service->createHold(
+                tenantId: $tenant->id,
+                employeeId: $employee->id,
+                serviceId: $service->id,
+                date: '2026-07-10',
+                startTime: '10:00',
+                endTime: '11:00',
+            );
+
+            $this->assertSame(BookingHold::ACTIVE_SLOT_KEY, $newHold->refresh()->active_slot_key);
+        }
+    }
+
+    public function test_expire_holds_deletes_only_expired_holds_for_requested_tenant(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+        $otherTenant = Tenant::create(['name' => 'Other Salon', 'slug' => 'other-cleanup']);
+        $otherEmployee = User::create([
+            'tenant_id' => $otherTenant->id,
+            'name' => 'Other Employee',
+            'email' => fake()->unique()->safeEmail(),
+            'password' => bcrypt('password'),
+            'role' => 'employee',
+        ]);
+        $otherService = Service::create([
+            'tenant_id' => $otherTenant->id,
+            'name' => 'Other Service',
+            'price_cents' => 4000,
+            'duration_minutes' => 60,
+            'active' => true,
+        ]);
+
+        $expiredHold = BookingHold::create([
+            'tenant_id' => $tenant->id,
+            'employee_id' => $employee->id,
+            'service_id' => $service->id,
+            'date' => '2026-07-10',
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'session_id' => 'expired-cleanup',
+            'expires_at' => Carbon::now()->subMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+        $futureHold = BookingHold::create([
+            'tenant_id' => $tenant->id,
+            'employee_id' => $employee->id,
+            'service_id' => $service->id,
+            'date' => '2026-07-10',
+            'start_time' => '11:00',
+            'end_time' => '12:00',
+            'session_id' => 'future-cleanup',
+            'expires_at' => Carbon::now()->addMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+        $otherExpiredHold = BookingHold::create([
+            'tenant_id' => $otherTenant->id,
+            'employee_id' => $otherEmployee->id,
+            'service_id' => $otherService->id,
+            'date' => '2026-07-10',
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'session_id' => 'other-expired-cleanup',
+            'expires_at' => Carbon::now()->subMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+
+        $this->assertSame(1, $this->service->expireHolds($tenant->id));
+
+        $this->assertDatabaseMissing('booking_holds', ['id' => $expiredHold->id]);
+        $this->assertDatabaseHas('booking_holds', ['id' => $futureHold->id]);
+        $this->assertDatabaseHas('booking_holds', ['id' => $otherExpiredHold->id]);
+    }
+
     // ─── 6.6: AvailabilityService excludes active holds ────────────────────
 
     public function test_availability_service_excludes_slots_with_active_holds(): void

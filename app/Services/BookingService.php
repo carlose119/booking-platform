@@ -37,6 +37,7 @@ class BookingService
     ): BookingHold {
         $tenant = Tenant::findOrFail($tenantId);
         $holdTtlMinutes = $this->getHoldTtl($tenant);
+        $hasActiveSlotKey = Schema::hasColumn('booking_holds', 'active_slot_key');
 
         $attributes = [
             'tenant_id' => $tenantId,
@@ -49,11 +50,17 @@ class BookingService
             'expires_at' => Carbon::now()->addMinutes($holdTtlMinutes),
         ];
 
-        if (Schema::hasColumn('booking_holds', 'active_slot_key')) {
+        if ($hasActiveSlotKey) {
             $attributes['active_slot_key'] = BookingHold::ACTIVE_SLOT_KEY;
         }
 
-        return BookingHold::create($attributes);
+        return DB::transaction(function () use ($attributes, $date, $employeeId, $endTime, $hasActiveSlotKey, $startTime, $tenantId): BookingHold {
+            if ($hasActiveSlotKey) {
+                $this->clearExpiredActiveSlotKeys($tenantId, $employeeId, $date, $startTime, $endTime);
+            }
+
+            return BookingHold::create($attributes);
+        });
     }
 
     /**
@@ -79,6 +86,7 @@ class BookingService
             ->findOrFail($holdId);
 
         if ($hold->expires_at->isPast()) {
+            $this->clearHoldActiveSlotKey($hold);
             $hold->delete();
             abort(422, 'This hold has expired. Please select a new slot.');
         }
@@ -269,9 +277,37 @@ class BookingService
     /**
      * Delete all expired holds. Returns the number of holds deleted.
      */
-    public function expireHolds(): int
+    public function expireHolds(?int $tenantId = null): int
     {
-        return BookingHold::where('expires_at', '<', now())->delete();
+        return BookingHold::where('expires_at', '<', now())
+            ->when($tenantId !== null, fn ($query) => $query->where('tenant_id', $tenantId))
+            ->delete();
+    }
+
+    private function clearExpiredActiveSlotKeys(
+        int $tenantId,
+        int $employeeId,
+        string $date,
+        string $startTime,
+        string $endTime,
+    ): void {
+        BookingHold::where('tenant_id', $tenantId)
+            ->where('employee_id', $employeeId)
+            ->whereDate('date', $date)
+            ->where('start_time', $startTime)
+            ->where('end_time', $endTime)
+            ->where('active_slot_key', BookingHold::ACTIVE_SLOT_KEY)
+            ->where('expires_at', '<=', now())
+            ->update(['active_slot_key' => null]);
+    }
+
+    private function clearHoldActiveSlotKey(BookingHold $hold): void
+    {
+        if (! Schema::hasColumn('booking_holds', 'active_slot_key')) {
+            return;
+        }
+
+        $hold->forceFill(['active_slot_key' => null])->save();
     }
 
     /**

@@ -288,6 +288,69 @@ class BookingCalendarTest extends TestCase
             ->assertSee('10:00');
     }
 
+    public function test_component_shows_expired_hold_slot_as_available_and_selectable(): void
+    {
+        [$tenant, $employee, $service, $date] = $this->createBookableSlot();
+
+        $expiredHold = BookingHold::create([
+            'tenant_id' => $tenant->id,
+            'service_id' => $service->id,
+            'employee_id' => $employee->id,
+            'date' => $date->toDateString(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'session_id' => 'expired-livewire-hold',
+            'expires_at' => Carbon::now()->subMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+
+        Livewire::test(BookingCalendar::class, ['tenantId' => $tenant->id])
+            ->set('selectedService', $service->id)
+            ->set('selectedDate', $date->toDateString())
+            ->assertSee('Choose 10:00')
+            ->assertDontSee('Temporarily held')
+            ->call('selectSlot', $employee->id, '10:00', '11:00')
+            ->assertSet('currentStep', 2)
+            ->assertSet('errorMessage', null);
+
+        $this->assertNull($expiredHold->refresh()->active_slot_key);
+        $this->assertSame(
+            1,
+            BookingHold::query()
+                ->where('tenant_id', $tenant->id)
+                ->where('employee_id', $employee->id)
+                ->whereDate('date', $date->toDateString())
+                ->where('start_time', '10:00')
+                ->where('end_time', '11:00')
+                ->where('active_slot_key', BookingHold::ACTIVE_SLOT_KEY)
+                ->count()
+        );
+    }
+
+    public function test_component_hides_active_hold_while_neighboring_slot_remains_available(): void
+    {
+        [$tenant, $employee, $service, $date] = $this->createBookableSlot();
+
+        BookingHold::create([
+            'tenant_id' => $tenant->id,
+            'service_id' => $service->id,
+            'employee_id' => $employee->id,
+            'date' => $date->toDateString(),
+            'start_time' => '10:00',
+            'end_time' => '11:00',
+            'session_id' => 'active-livewire-hold',
+            'expires_at' => Carbon::now()->addMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+
+        Livewire::test(BookingCalendar::class, ['tenantId' => $tenant->id])
+            ->set('selectedService', $service->id)
+            ->set('selectedDate', $date->toDateString())
+            ->assertSee('Temporarily held')
+            ->assertSee('10:00')
+            ->assertSee('Choose 11:00');
+    }
+
     // ─── 5.6 continued: Tenant isolation via Livewire ──────────────────────
 
     public function test_component_tenant_isolation_no_cross_tenant_services(): void
@@ -568,6 +631,7 @@ class BookingCalendarTest extends TestCase
             'end_time' => '10:45',
             'session_id' => 'cancel-test',
             'expires_at' => Carbon::now()->addMinutes(5),
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
         ]);
 
         Livewire::test(BookingCalendar::class, ['tenantId' => $tenant->id])
@@ -580,5 +644,6 @@ class BookingCalendarTest extends TestCase
         // Hold should be expired (expires_at set to now)
         $holdRefreshed = BookingHold::find($hold->id);
         $this->assertTrue($holdRefreshed->expires_at->lte(now()));
+        $this->assertNull($holdRefreshed->active_slot_key);
     }
 }

@@ -36,20 +36,20 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: RED Service Semantics
 
-- [ ] 3.1 Add `tests/Unit/BookingServiceHoldTest.php`: expired hold rebooking succeeds without cleanup; active hold conflict still fails.
-- [ ] 3.2 Add release/consume RED cases: cancel/expiration/confirmation paths clear or remove `active_slot_key` before rows can linger.
-- [ ] 3.3 Add cleanup hygiene RED cases: expired cleanup deletes expired rows, preserves future rows, and respects tenant isolation.
+- [x] 3.1 Add `tests/Unit/BookingServiceHoldTest.php`: expired hold rebooking succeeds without cleanup; active hold conflict still fails.
+- [x] 3.2 Add release/consume RED cases: cancel/expiration/confirmation paths clear or remove `active_slot_key` before rows can linger.
+- [x] 3.3 Add cleanup hygiene RED cases: expired cleanup deletes expired rows, preserves future rows, and respects tenant isolation.
 
 ## Phase 4: GREEN Service Implementation
 
-- [ ] 4.1 Update `app/Services/BookingService.php`: transactionally clear expired matching slot tokens, then insert with `ACTIVE_SLOT_KEY`.
-- [ ] 4.2 Update release/consume paths in `app/Services/BookingService.php` and `app/Livewire/BookingCalendar.php` to null active keys when rows remain.
-- [ ] 4.3 Verify cleanup remains hygiene-only; adjust cleanup command/service only if tests show active keys linger incorrectly.
+- [x] 4.1 Update `app/Services/BookingService.php`: transactionally clear expired matching slot tokens, then insert with `ACTIVE_SLOT_KEY`.
+- [x] 4.2 Update release/consume paths in `app/Services/BookingService.php` and `app/Livewire/BookingCalendar.php` to null active keys when rows remain.
+- [x] 4.3 Verify cleanup remains hygiene-only; adjust cleanup command/service only if tests show active keys linger incorrectly.
 
 ## Phase 5: Calendar Alignment and DB Receipt
 
-- [ ] 5.1 Add `tests/Feature/Livewire/BookingCalendarTest.php`: expired-held slot displays available and selected hold succeeds.
-- [ ] 5.2 Add active-held calendar conflict coverage: active hold hides slot while neighboring valid slot remains available.
+- [x] 5.1 Add `tests/Feature/Livewire/BookingCalendarTest.php`: expired-held slot displays available and selected hold succeeds.
+- [x] 5.2 Add active-held calendar conflict coverage: active hold hides slot while neighboring valid slot remains available.
 - [x] 5.3 Add MySQL/MariaDB validation receipt: automated optional test command or `docs/testing/booking-hold-expiry-mysql.md` manual command proving active duplicate reject + expired rebook allow.
 
 ## Surgical Remediation: Slice 1 Review Blockers

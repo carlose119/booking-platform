@@ -12,6 +12,7 @@ use App\Services\Stripe\StripeAccountResolver;
 use App\Services\StripeService;
 use App\Support\Currency;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Schema;
 use Livewire\Attributes\Computed;
 use Livewire\Component;
 use Symfony\Component\HttpKernel\Exception\HttpException;
@@ -300,9 +301,15 @@ class BookingCalendar extends Component
     public function cancelBooking(): void
     {
         if ($this->holdId) {
+            $updates = ['expires_at' => now()];
+
+            if (Schema::hasColumn('booking_holds', 'active_slot_key')) {
+                $updates['active_slot_key'] = null;
+            }
+
             BookingHold::where('id', $this->holdId)
                 ->where('tenant_id', $this->tenantId)
-                ->update(['expires_at' => now()]);
+                ->update($updates);
         }
 
         $this->reset([
