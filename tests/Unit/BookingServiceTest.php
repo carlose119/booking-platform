@@ -22,6 +22,7 @@ use Illuminate\Foundation\Console\QueuedCommand;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Tests\TestCase;
 
@@ -134,6 +135,50 @@ class BookingServiceTest extends TestCase
             $hold->expires_at->lte($after->addMinutes($expectedTtl)->addSeconds(2)),
             'expires_at should be at most now + hold_ttl_minutes'
         );
+    }
+
+    public function test_create_hold_persists_active_slot_key_when_column_exists(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+
+        $hold = $this->service->createHold(
+            tenantId: $tenant->id,
+            employeeId: $employee->id,
+            serviceId: $service->id,
+            date: '2026-07-10',
+            startTime: '10:00',
+            endTime: '11:00',
+        );
+
+        $this->assertSame(BookingHold::ACTIVE_SLOT_KEY, $hold->refresh()->active_slot_key);
+        $this->assertDatabaseHas('booking_holds', [
+            'id' => $hold->id,
+            'active_slot_key' => BookingHold::ACTIVE_SLOT_KEY,
+        ]);
+    }
+
+    public function test_create_hold_is_compatible_before_active_slot_key_migration_runs(): void
+    {
+        [$tenant, $employee, $service] = $this->createTenantStack();
+        $this->simulateBookingHoldsTableBeforeActiveSlotKeyMigration();
+
+        $hold = $this->service->createHold(
+            tenantId: $tenant->id,
+            employeeId: $employee->id,
+            serviceId: $service->id,
+            date: '2026-07-10',
+            startTime: '10:00',
+            endTime: '11:00',
+        );
+
+        $this->assertNotNull($hold->id);
+        $this->assertDatabaseHas('booking_holds', [
+            'id' => $hold->id,
+            'tenant_id' => $tenant->id,
+            'employee_id' => $employee->id,
+            'service_id' => $service->id,
+        ]);
+        $this->assertFalse(Schema::hasColumn('booking_holds', 'active_slot_key'));
     }
 
     public function test_cancel_booking_records_audit_fields_and_dispatches_notification(): void
@@ -987,5 +1032,25 @@ class BookingServiceTest extends TestCase
             $hold->expires_at->lte($after->addMinutes(15)->addSeconds(2)),
             'expires_at should be at most now + 15 minutes'
         );
+    }
+
+    private function simulateBookingHoldsTableBeforeActiveSlotKeyMigration(): void
+    {
+        if (Schema::hasColumn('booking_holds', 'active_slot_key')) {
+            Schema::table('booking_holds', function ($table): void {
+                $table->dropUnique('booking_holds_unique_active_slot');
+            });
+
+            Schema::table('booking_holds', function ($table): void {
+                $table->dropColumn('active_slot_key');
+            });
+        }
+
+        Schema::table('booking_holds', function ($table): void {
+            $table->unique(
+                ['tenant_id', 'employee_id', 'date', 'start_time', 'end_time'],
+                'booking_holds_unique_slot'
+            );
+        });
     }
 }

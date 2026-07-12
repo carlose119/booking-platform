@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class BookingHold extends Model
 {
+    public const ACTIVE_SLOT_KEY = 'active';
+
     protected $fillable = [
         'tenant_id',
         'service_id',
@@ -20,6 +22,7 @@ class BookingHold extends Model
         'client_phone',
         'session_id',
         'expires_at',
+        'active_slot_key',
     ];
 
     protected function casts(): array
@@ -53,5 +56,10 @@ class BookingHold extends Model
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('expires_at', '>', now());
+    }
+
+    public function scopeParticipatingInActiveSlotUniqueness(Builder $query): Builder
+    {
+        return $query->where('active_slot_key', self::ACTIVE_SLOT_KEY);
     }
 }

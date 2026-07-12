@@ -15,6 +15,7 @@ use Carbon\Carbon;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class BookingService
@@ -37,7 +38,7 @@ class BookingService
         $tenant = Tenant::findOrFail($tenantId);
         $holdTtlMinutes = $this->getHoldTtl($tenant);
 
-        return BookingHold::create([
+        $attributes = [
             'tenant_id' => $tenantId,
             'employee_id' => $employeeId,
             'service_id' => $serviceId,
@@ -46,7 +47,13 @@ class BookingService
             'end_time' => $endTime,
             'session_id' => $sessionId ?? Str::random(40),
             'expires_at' => Carbon::now()->addMinutes($holdTtlMinutes),
-        ]);
+        ];
+
+        if (Schema::hasColumn('booking_holds', 'active_slot_key')) {
+            $attributes['active_slot_key'] = BookingHold::ACTIVE_SLOT_KEY;
+        }
+
+        return BookingHold::create($attributes);
     }
 
     /**
