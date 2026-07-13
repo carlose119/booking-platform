@@ -49,7 +49,7 @@ The system SHALL generate time slots from EmployeeSchedule records matching the 
 
 ### Requirement: Conflict Filtering
 
-The system SHALL exclude slots that overlap with existing Bookings where `status != 'cancelled'` AND exclude slots with active (expires_at > now()) holds. For admin reschedule validation only, the system MUST ignore the booking currently being moved while still considering every other booking/hold in the same tenant, employee, date, and time range.
+The system SHALL exclude slots that overlap with existing Bookings where `status != 'cancelled'` AND exclude slots with active (expires_at > now()) holds. Expired holds MUST NOT block availability. For admin reschedule validation only, the system MUST ignore the booking currently being moved while still considering every other booking/active hold in the same tenant, employee, date, and time range.
 
 (Previously: Only excluded slots overlapping with existing Bookings)
 
@@ -67,7 +67,7 @@ The system SHALL exclude slots that overlap with existing Bookings where `status
 - THEN the 10:00 slot is excluded
 - AND the 10:30 slot remains available (if within schedule)
 
-#### Scenario: No conflicts or holds
+#### Scenario: No conflicts or active holds
 
 - GIVEN E1 has no bookings and no active holds on Monday and service S1 (30 min)
 - WHEN availability is requested for E1 on Monday

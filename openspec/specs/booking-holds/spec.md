@@ -6,6 +6,23 @@ Prevent double-booking during guest checkout by holding slots with TTL-based exp
 
 ## Requirements
 
+### Requirement: Active-Hold Migration Safety
+
+The system MUST migrate booking_holds to active-only uniqueness without relying on cleanup. Migration MUST backfill expired/non-active rows as non-conflicting and MUST fail safely when duplicate active rows exist for the same tenant, employee, date, and time range.
+
+#### Scenario: Expired rows backfill safely
+
+- GIVEN expired hold rows exist for previously selected slots
+- WHEN the active-only uniqueness migration runs
+- THEN those rows become non-conflicting for uniqueness
+- AND no cleanup is required before new holds can be created
+
+#### Scenario: Duplicate active rows detected
+
+- GIVEN two active holds conflict for the same tenant and slot
+- WHEN migration preflight runs
+- THEN the migration reports the duplicates and stops before adding the constraint
+
 ### Requirement: Hold Creation
 
 The system SHALL create a booking hold record when a guest selects a slot. The hold MUST include tenant_id, employee_id, service_id, date, start_time, end_time, guest fields (client_name, client_email, client_phone), and expires_at (current time + 10 minutes).
@@ -25,7 +42,7 @@ The system SHALL create a booking hold record when a guest selects a slot. The h
 
 ### Requirement: Race Condition Prevention
 
-The system SHALL enforce a composite unique index on (tenant_id, employee_id, date, start_time, end_time) where expires_at > now(). The database MUST reject duplicate holds for the same slot.
+The system SHALL enforce database-level uniqueness only for active holds for the same tenant_id, employee_id, date, start_time, and end_time. Expired, converted, or cleaned holds MUST NOT participate in the active uniqueness key. The database MUST reject duplicate active holds for the same slot.
 
 #### Scenario: Second hold on same slot rejected
 
@@ -59,7 +76,7 @@ The system SHALL exclude slots with active (expires_at > now()) holds from avail
 
 ### Requirement: Expired Hold Cleanup
 
-The system SHALL run a scheduled command every minute to delete holds where expires_at < now(). The cleanup MUST be tenant-scoped.
+The system SHALL run scheduled cleanup to delete holds where expires_at < now(). Cleanup is hygiene only: correctness for availability and hold creation MUST NOT depend on cleanup running before insert. Cleanup MUST preserve tenant isolation.
 
 #### Scenario: Expired holds deleted
 
